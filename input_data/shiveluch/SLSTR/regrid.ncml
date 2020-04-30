@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<netcdf xmlns="http://www.unidata.ucar.edu/namespaces/netcdf/ncml-2.2"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.unidata.ucar.edu/namespaces/netcdf/ncml-2.2 http://www.unidata.ucar.edu/schemas/netcdf/ncml-2.2.xsd">
+
+<dimension name="longitude" orgName='nx' length="450" />
+<dimension name="latitude" orgName='ny' length="430" />
+
+<variable name="longitude" type="double" shape="longitude" >
+  <attribute name="standard_name" value="projection_x_coordinate" type="String" />
+  <attribute name="long_name" type="string" value="longitude" />
+  <attribute name="units" type="string" value="degrees" />
+</variable>
+
+<variable name="latitude" type="double" shape="latitude" >
+  <attribute name="standard_name" value="projection_y_coordinate" type="String" />
+  <attribute name="long_name" type="string" value="latitude" />
+  <attribute name="units" type="string" value="degrees" />
+</variable>
+
+<variable name="lon" orgName='longitude' type="double" shape="longitude latitude" />
+<variable name="lat" orgName='latitude' type="double" shape="longitude latitude" />
+
+<variable name="AshFlag" type="int"  shape="longitude latitude" >
+  <attribute name="coordinates" type="String" value="lon lat" />
+  <attribute name="valid_min" type="int" value="0"/>
+  <attribute name="valid_max" type="int" value="2"/>
+  <attribute name="flag_values" type="int" separator="," value="0,1,2" />
+  <attribute name="flag_meanings" type="String" value="no_ash ash uncertain" />
+  <attribute name="_FillValue" type="int" value="2"/>
+  <remove type="attribute" name="units" />
+</variable>
+
+<variable name="AshHeight" type="double"  shape="longitude latitude" >
+  <attribute name="coordinates" type="String" value="lon lat" />
+  <attribute name="standard_name" type="string" value="AshHeight" />
+  <attribute name="long_name" type="string" value="Ash height" />
+  <attribute name="units" type="string" value="km" />
+  <attribute name="valid_min" type="double" value="0"/>
+  <attribute name="valid_max" type="double" value="100"/>
+  <attribute name="_FillValue" type="double" value="0"/>
+</variable>
+
+<variable name="AshMass" type="double"  shape="longitude latitude" >
+  <attribute name="coordinates" type="String" value="lon lat" />
+  <attribute name="standard_name" type="string" value="AshMass" />
+  <attribute name="long_name" type="string" value="Ash mass" />
+  <attribute name="units" type="string" value="g/m**2" />
+  <attribute name="valid_min" type="double" value="0"/>
+  <attribute name="valid_max" type="double" value="1000000"/>
+  <attribute name="_FillValue" type="double" value="0"/>
+</variable>
+
+</netcdf>

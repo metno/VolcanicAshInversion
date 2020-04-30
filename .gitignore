@@ -1,0 +1,5 @@
+conda_ash_inv
+output
+miniconda3
+from_nebula
+input_data/**/*.nc
