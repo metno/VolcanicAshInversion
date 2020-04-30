@@ -103,6 +103,12 @@ inv_exec echo "INFO: Done matching files"
 
 
 
+#Create emission source file from a priori
+inv_exec echo "INFO: Creating a priori emission source file"
+inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
+                --json "$RESULTS_DIR/a_priori.json"
+
+
 
 #Run inversion procedure
 for SOLVER in "direct" \
@@ -130,6 +136,8 @@ for SOLVER in "direct" \
                     --solver $SOLVER \
                     $SYSTEM_MATRIX \
                     --output_dir "$RESULTS_DIR/$SOLVER"
+
+    inv_exec echo "INFO: $SOLVER done, creating a posteriori emission source file"
     inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
                     --json "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.json"
 
@@ -138,9 +146,8 @@ for SOLVER in "direct" \
         inv_exec ln -s "$RESULTS_DIR/$SOLVER/inversion_system_matrix.npz" $SYSTEM_MATRIX_FILE
     fi
 done
+
 inv_exec echo "INFO: Done with inversion procedure"
-
-
 
 
 
