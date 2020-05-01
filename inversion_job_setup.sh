@@ -59,6 +59,7 @@ function usage {
     echo "                                 # "
     echo "     [--out-dir <output_dir>]    # Explicitly set output directory"
     echo "     [--memory {1G|4G|16G|...}]  # Reserve x GB memory (default '$MEMORY')"
+    echo "     [--memory <queue_name>]     # Submit to this queue (default '$QUEUE')"
     echo "     [--submit]                  # Submit using qsub, otherwise just set up job"
 }
 
@@ -71,6 +72,7 @@ while [[ $# -gt 0 ]]; do
         --tag)      [ $# -gt 0 ] && TAG="$1"      && shift ;;
         --out-dir)  [ $# -gt 0 ] && OUT_DIR="$1"  && shift ;;
         --memory)   [ $# -gt 0 ] && MEMORY="$1"   && shift ;;
+        --queue)    [ $# -gt 0 ] && QUEUE="$1"   && shift ;;
         --submit)                   SUBMIT=1               ;;
         -h|--help)
             usage
