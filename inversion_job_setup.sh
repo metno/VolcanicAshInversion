@@ -44,7 +44,8 @@ OUT_DIR=${OUT_DIR:-NONE}
 TAG=${TAG:-NONE}
 QUEUE=${QUEUE:-NONE}       #qsub queue to submit to
 PROJECT=${PROJECT:-NONE}   #qsub project to use
-MEMORY=${MEMORY:-1G}      #qsub memory to use
+MEMORY=${MEMORY:-1G}       #qsub memory to use
+PARALLEL_ENVIRONMENT=${PARALLEL_ENVIRONMENT:NONE} #qsub PE to use
 SUBMIT=${SUBMIT:-0}
 
 

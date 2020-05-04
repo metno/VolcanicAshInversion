@@ -32,6 +32,8 @@
 ## Resource use
 #$ -l h_rt=01:30:00
 #$ -l h_vmem=@MEMORY@
+#$ -pe @PARALLEL_ENVIRONMENT@
+
 
 ## Queue to submit in (see qstat -g c for possibilities)
 #$ -q @QUEUE@
