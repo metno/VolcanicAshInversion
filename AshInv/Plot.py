@@ -147,14 +147,14 @@ def plotAshInv(emission_times, level_heights, a_priori, a_posteriori, fig=None, 
 
     y_max = max(1.0e-10, 1.3*max(a_priori.sum(axis=0).max(), a_posteriori.sum(axis=0).max()))
 
-    diff = a_posteriori-a_priori
-    diff_range = np.max(np.abs(diff))
+    diff = (a_posteriori-a_priori) / a_priori
+    diff_range = 0.5 #np.max(np.abs(diff))
     x_range = max(a_priori.max(), a_posteriori.max())
 
     if (fig is None):
         fig = plt.figure(figsize=(14,4), dpi=200)
 
-    # First subfigure
+    # First subfigure (a priori)
     ax1 = plt.subplot(1,3,1)
     plt.title("A priori")
     plt.imshow(a_priori, aspect='auto', interpolation='none', origin='lower', cmap=cm, vmin=0.0, vmax=x_range)
@@ -169,7 +169,7 @@ def plotAshInv(emission_times, level_heights, a_priori, a_posteriori, fig=None, 
     plt.grid()
     plt.legend()
 
-    #Second subfigure
+    #Second subfigure (a posteriori)
     ax1 = plt.subplot(1,3,2)
     plt.title("Inverted")
     plt.imshow(a_posteriori, aspect='auto', interpolation='none', origin='lower', cmap=cm, vmin=0.0, vmax=x_range)
@@ -185,7 +185,7 @@ def plotAshInv(emission_times, level_heights, a_priori, a_posteriori, fig=None, 
     plt.grid()
     plt.legend()
 
-    #Third subfigure
+    #Third subfigure (difference)
     plt.subplot(1,3,3)
     plt.title("Inverted - A priori")
     plt.imshow(diff, aspect='auto',

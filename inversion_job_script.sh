@@ -103,24 +103,13 @@ inv_exec echo "INFO: Done matching files"
 
 
 
-#Create emission source file from a priori
-inv_exec echo "INFO: Creating a priori emission source file"
-inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
-                --json "$RESULTS_DIR/a_priori.json"
 
 
 
 #Run inversion procedure
-for SOLVER in "direct" \
-    "inverse" \
-    "pseudo_inverse" \
-    "lstsq" \
-    "lstsq2" \
-    "nnls" \
-    "nnls2" \
-    "lsq_linear" \
-    "lsq_linear2" \
-    ; do
+#SOLVERS=("direct" "inverse" "pseudo_inverse" "lstsq" "lstsq2" "nnls" "nnls2" "lsq_linear" "lsq_linear2")
+SOLVERS=("direct" "inverse" "pseudo_inverse" "lstsq2" "nnls" "nnls2" "lsq_linear2")
+for SOLVER in "${SOLVERS[@]}"; do
 
     SYSTEM_MATRIX=""
     if [ -e $SYSTEM_MATRIX_FILE ]; then
@@ -139,6 +128,12 @@ for SOLVER in "direct" \
 
     inv_exec echo "INFO: $SOLVER done, creating a posteriori emission source file"
     inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
+                    --variable 'a_priori_2d' \
+                    --output "$RESULTS_DIR/$SOLVER/a_priori.csv" \
+                    --json "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.json"
+    inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
+                    --variable 'a_posteriori_2d' \
+                    --output "$RESULTS_DIR/$SOLVER/a_posteriori.csv" \
                     --json "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.json"
 
     #Symlink system matrix for subsequent runs.

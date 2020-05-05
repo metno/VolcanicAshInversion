@@ -29,7 +29,7 @@ import datetime
 import json
 
 
-def aPosterioriToSourceTerm(filename, outfilename):
+def aPosterioriToSourceTerm(filename, outfilename, variable):
     #Read data
     with open(filename, 'r') as infile:
         json_string = infile.read()
@@ -43,8 +43,7 @@ def aPosterioriToSourceTerm(filename, outfilename):
     level_altitudes = np.cumsum(np.concatenate(([0], level_heights)))
 
     ordering_index = np.array(json_data["ordering_index"], dtype=np.int64)
-    a_priori_2d = np.array(json_data["a_priori_2d"], dtype=np.float64)
-    a_posteriori_2d = np.array(json_data["a_posteriori_2d"], dtype=np.float64)
+    data = np.array(json_data[variable], dtype=np.float64)
 
     residual = np.array(json_data["residual"], dtype=np.float64)
     convergence = np.array(json_data["convergence"], dtype=np.float64)
@@ -94,8 +93,7 @@ def aPosterioriToSourceTerm(filename, outfilename):
                     start = npTimeToStr(emission_times[t])
                     end = npTimeToStr(emission_times[t] + np.timedelta64(3, 'h'))
                     altitude = (level_altitudes[a] + level_altitudes[a+1]) // 2
-                    source_term = a_posteriori_2d[emis_index]
-                    #source_term = a_priori_2d[emis_index]
+                    source_term = data[emis_index]
 
                     source_term_str = "ASHinv,ASH_L01,SLEV,{:02d},EVENT,{:f},,{:s},{:s},alt={:.0f}\n".format(level, source_term, start, end, altitude)
                     if (source_term < 0):
@@ -110,6 +108,7 @@ if __name__ == "__main__":
 
     parser = configargparse.ArgParser(description='A posteriori information to EMEP source term.')
     parser.add("-j", "--json", type=str, help="JSON-file to convert", default=None, required=True)
+    parser.add("-v", "--variable", type=str, help="Output file", default='a_posteriori_2d')
     parser.add("-o", "--output", type=str, help="Output file", default=None)
     args = parser.parse_args()
 
@@ -126,4 +125,4 @@ if __name__ == "__main__":
 
     if (args.json is not None):
         print("Writing output to " + outfile)
-        aPosterioriToSourceTerm(args.json, outfile)
+        aPosterioriToSourceTerm(args.json, outfile, variable=args.variable)

@@ -30,7 +30,7 @@
 #$ -N "ashinv-@TAG@"
 
 ## Resource use
-#$ -l h_rt=01:30:00
+#$ -l h_rt=@RUNTIME@
 #$ -l h_vmem=@MEMORY@
 #$ -pe @PARALLEL_ENVIRONMENT@
 

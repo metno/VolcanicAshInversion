@@ -562,7 +562,7 @@ class AshInversion():
         D[-1, -1] = -1
         DTD = np.matmul(D.transpose(), D)
 
-            #This solver does not change a priori uncertainty - no use in using multiple iterations
+        #These solvers do not change a priori uncertainty - no use in using multiple iterations
         if (solver=='nnls' or solver == 'lstsq'):
             max_iter = 1
 

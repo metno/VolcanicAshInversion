@@ -90,7 +90,7 @@ class MatchFiles:
             with Dataset(sim_file.filename) as nc_file:
                 sim_time = nc_file['time'][:]
                 unit = nc_file['time'].units
-                sim_time = num2date(sim_time, units = unit)
+                sim_time = num2date(sim_time, units = unit, only_use_cftime_datetimes=False, only_use_python_datetimes=True)
 
                 #Raise error if timezone supplied in NetCDF file
                 #FIXME: perform automatic conversion
@@ -674,7 +674,7 @@ class MatchFiles:
                 #Find timestep closest to observation
                 sim_time = nc_file['time'][:]
                 unit = nc_file['time'].units
-                sim_time = num2date(sim_time, units = unit)
+                sim_time = num2date(sim_time, units = unit, only_use_cftime_datetimes=False, only_use_python_datetimes=True)
                 for i in range(len(sim_time)):
                     if (sim_time[i].tzinfo is not None and sim_time[i].tzinfo is not datetime.timezone.utc):
                         raise RuntimeError("Invalid timezone info in {:s}".format(filename))
@@ -727,8 +727,12 @@ if __name__ == "__main__":
     parser.add("-c", "--config", is_config_file=True, help="config file which specifies options (commandline overrides)")
     parser.add('--simulation_csv', type=str,
                         help='CSV-file with EEMEP simulation runs', required=True)
+    parser.add('--simulation_basedir', type=str,
+                        help='Absolute path to where simulation files are', required=False, default=None)
     parser.add('--observation_csv', type=str,
                         help="CSV-file with satellite observations", required=True)
+    parser.add('--observation_basedir', type=str,
+                        help='Absolute path to where observation files are', required=False, default=None)
     parser.add("--output_dir", type=str,
                         help="Output dir to place matched data into", required=True)
     parser.add("--no_mask_sim", action="store_false",
@@ -748,6 +752,8 @@ if __name__ == "__main__":
 
     match = MatchFiles(emep_runs=args.simulation_csv,
                    satellite_observations=args.observation_csv,
+                   emep_runs_basedir=args.simulation_basedir,
+                   satellite_observations_basedir=args.observation_basedir,
                    verbose=args.verbose)
     match.match_files(output_dir=args.output_dir,
                       mask_sim=args.no_mask_sim,

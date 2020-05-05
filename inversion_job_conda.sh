@@ -28,11 +28,11 @@ CONDA_ENV_PATH="$SCRIPT_DIR/conda_ash_inv"
 
 
 # Check that conda has been set up correctly
-if [[! -f $CONDA_EXE ]]; then
+if [[ ! -f $CONDA_EXE ]]; then
     echo "ERROR: Conda has not been set up correctly! Please download and install conda"
     exit -1
 fi
-if [[! -d $CONDA_ENV_PATH ]]; then
+if [[ ! -d $CONDA_ENV_PATH ]]; then
     echo "ERROR: Conda environment has not been set up correctly! Please set up environment"
     exit -1
 fi
