@@ -89,11 +89,13 @@ done
 
 
 if [ "$TAG" == "NONE" ]; then
-    echo "Please supply a run tag --tag <RUN TAG>"
+    usage
+    echo "Missing --tag <RUN TAG>"
     exit -1
 fi
 if [ "$CONF_DIR" == "NONE" ]; then
-    echo "Please supply a proper config directory --conf <DIR>"
+    usage
+    echo "Missing --conf <DIR>"
     exit -1
 fi
 if [ "$OUT_DIR" == "NONE" ]; then
