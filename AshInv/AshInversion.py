@@ -330,7 +330,7 @@ class AshInversion():
                             if time_index[t] >= 0:
                                 val = sim[t, a, o]
                                 emission_index = self.ordering_index[a, time_index[t]]
-                                if not np.ma.is_masked(val):
+                                if emission_index >= 0 and not np.ma.is_masked(val):
                                     M[obs_counter, emission_index] = val
 
                     #FIXME Birthe uses constant standard deviation here.
@@ -349,8 +349,9 @@ class AshInversion():
                             for t in range(row.num_timesteps):
                                 if time_index[t] >= 0:
                                     emission_index = self.ordering_index[a, time_index[t]]
-                                    M[obs_counter, emission_index] = M[obs_counter-1, emission_index]
-                                    M[obs_counter-1, emission_index] = 0
+                                    if (emission_index >= 0):
+                                        M[obs_counter, emission_index] = M[obs_counter-1, emission_index]
+                                        M[obs_counter-1, emission_index] = 0
 
                         #FIXME What should the standard deviation be here?
                         y_0[obs_counter] = 0.0 #Zero oserved ash here
@@ -923,7 +924,7 @@ if __name__ == '__main__':
             a_priori_threshold=args.a_priori_threshold
         )
         if (ash_inv.M.size == 0):
-            print("System matrix pruned to zero size... Exiting")
+            print("System matrix pruned to zero size (i.e., no observations match any of the simulations)... Exiting")
             sys.exit(-1)
         fig = ash_inv.plotAshInvMatrix()
         fig.savefig(output_basename + "_system_matrix_pruned.png", metadata=run_meta)
