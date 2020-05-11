@@ -117,6 +117,7 @@ class AshInversion():
             #Copy only data we care about
             self.emission_times = np.array(tmp["emission_times"], dtype='datetime64[ns]')
             self.level_heights = np.array(tmp["level_heights"], dtype=np.float64)
+            self.volcano_altitude = tmp["volcano_altitude"]
             a_priori_2d = np.array(tmp["a_priori_2d"], dtype=np.float64)
             a_priori_2d_uncertainty = np.array(tmp["a_priori_2d_uncertainty"], dtype=np.float64)
 
@@ -184,7 +185,7 @@ class AshInversion():
 
         #Check if we have observed altitudes
         #Then we double the number of observations: ash up to altitude, no ash above
-        level_altitudes = np.cumsum(self.level_heights)
+        level_altitudes = np.cumsum(self.level_heights) + self.volcano_altitude
         with Dataset(os.path.join(matched_file_dir, matched_files_df.matched_file[0])) as nc_file:
             if (use_elevations and 'obs_alt' in nc_file.variables.keys()):
                 self.logger.info("Using altitudes in inversion")
@@ -387,6 +388,7 @@ class AshInversion():
                      sigma_x=self.sigma_x,
                      ordering_index=self.ordering_index,
                      level_heights=self.level_heights,
+                     volcano_altitude=self.volcano_altitude,
                      emission_times=self.emission_times)
 
 
@@ -411,6 +413,7 @@ class AshInversion():
             self.sigma_x = data['sigma_x']
             self.ordering_index = data['ordering_index']
             self.level_heights = data['level_heights']
+            self.volcano_altitude = data['volcano_altitude']
             self.emission_times = data['emission_times']
 
 
@@ -523,7 +526,7 @@ class AshInversion():
         #Convert to 2d and plot
         a_priori = Plot.expandVariable(emission_times, self.level_heights, ordering_index, self.x_a)
         a_posteriori = Plot.expandVariable(emission_times, self.level_heights, ordering_index, self.x)
-        return Plot.plotAshInv(emission_times, self.level_heights, a_priori, a_posteriori, fig=fig)
+        return Plot.plotAshInv(emission_times, self.level_heights, self.volcano_altitude, a_priori, a_posteriori, fig=fig)
 
 
 
@@ -958,6 +961,7 @@ if __name__ == '__main__':
             'a_posteriori_2d': ash_inv.x.tolist(),
             'a_priori_2d': ash_inv.x_a.tolist(),
             'ordering_index': ash_inv.ordering_index.tolist(),
+            'volcano_altitude': ash_inv.volcano_altitude,
             'level_heights': ash_inv.level_heights.tolist(),
             'emission_times': ash_inv.emission_times.tolist(),
             'residual': ash_inv.residual,

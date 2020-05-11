@@ -421,12 +421,13 @@ class MatchFiles:
             min_obs_threshold = tmp["min_obs_threshold"] #Observations less than this are considered zero
             emission_times = np.array(tmp["emission_times"], dtype='datetime64[ns]')
             level_heights = np.array(tmp["level_heights"], dtype=np.float64)
+            volcano_altitude = tmp["volcano_altitude"]
             a_priori_2d = np.array(tmp["a_priori_2d"], dtype=np.float64) * 1.0e-9 #Kg to Tg
             altitude_scale = np.array(tmp["altitude_scale"], dtype=np.float64) # Scale observed altitude by some factor
             level_pattern = tmp["netcdf_level_pattern"]
             num_timesteps = emission_times.size
             num_altitudes = level_heights.size
-            level_altitudes = np.cumsum(level_heights)*altitude_scale
+            level_altitudes = volcano_altitude + np.cumsum(level_heights)*altitude_scale
 
         obs = None
         obs_alt = None

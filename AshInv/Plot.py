@@ -35,8 +35,8 @@ import os
 
 
 def makePlotFromJson(json_filename, outfile, colormap):
-    emission_times, level_heights, a_priori, a_posteriori, meta = readJson(json_filename)
-    fig = plotAshInv(emission_times, level_heights, a_priori, a_posteriori, colormap=colormap)
+    emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, meta = readJson(json_filename)
+    fig = plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, colormap=colormap)
     saveFig(outfile, fig, meta)
 
 
@@ -51,6 +51,7 @@ def readJson(json_filename):
     #Copy only data we care about
     emission_times = np.array(json_data["emission_times"], dtype='datetime64[ns]')
     level_heights = np.array(json_data["level_heights"], dtype=np.float64)
+    volcano_altitude = json_data["volcano_altitude"]
 
     ordering_index = np.array(json_data["ordering_index"], dtype=np.int64)
     a_priori_2d = np.array(json_data["a_priori_2d"], dtype=np.float64)
@@ -72,7 +73,7 @@ def readJson(json_filename):
     x = expandVariable(emission_times, level_heights, ordering_index, a_posteriori_2d)
     x_a = expandVariable(emission_times, level_heights, ordering_index, a_priori_2d)
 
-    return emission_times, level_heights, x_a, x, json.dumps(json_data, indent=4)
+    return emission_times, level_heights, volcano_altitude, x_a, x, json.dumps(json_data, indent=4)
 
 
 
@@ -94,7 +95,7 @@ def saveFig(filename, fig, metadata):
         pdf.savefig(fig)
 
 
-def plotAshInv(emission_times, level_heights, a_priori, a_posteriori, fig=None, usetex=False, colormap='default'):
+def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, fig=None, usetex=False, colormap='default'):
 
     def npTimeToDatetime(np_time):
         return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's'))
@@ -108,8 +109,8 @@ def plotAshInv(emission_times, level_heights, a_priori, a_posteriori, fig=None, 
     x_ticks = x_ticks[3::8]
     x_labels = x_labels[3::8]
 
-    y_ticks = np.arange(0, level_heights.size)
-    y_labels = ["{:.0f}".format(a) for a in np.cumsum(level_heights) - level_heights[0]/2]
+    y_ticks = np.arange(-0.5, level_heights.size+0.5)
+    y_labels = ["{:.0f}".format(a) for a in np.cumsum(np.concatenate(([volcano_altitude], level_heights)))]
     y_ticks = y_ticks[::2]
     y_labels = y_labels[::2]
 
