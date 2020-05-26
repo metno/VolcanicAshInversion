@@ -494,9 +494,9 @@ class MatchFiles:
 
 
     def read_observation_data(self, filename,
-                 netcdf_observation_varnames=["AshMass", "ash_loading"],
+                 netcdf_observation_varnames=["AshMass", "ash_loading", "ash_concentration_col"],
                  netcdf_observation_altitude_varnames=["AshHeight"],
-                 netcdf_observation_error_varnames=["AshFlag", "AF"]):
+                 netcdf_observation_error_varnames=["AshFlag", "AF", "ash_flag"]):
         """
         Reads the observation and observation flag from the NetCDF file
 

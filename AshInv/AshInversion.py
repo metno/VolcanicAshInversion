@@ -511,23 +511,6 @@ class AshInversion():
 
 
 
-    def plotAshInv(self, fig=None):
-        """
-        Plots the ash inversion results
-        """
-        #Get ordering index, and prune times that are not used
-        ordering_index = np.ma.masked_array(self.ordering_index, self.ordering_index==-9999, fill_value=0)
-        valid_times = np.flatnonzero(np.count_nonzero(ordering_index.mask == False, axis=0))
-        valid_min = valid_times.min()
-        valid_max = valid_times.max()
-        ordering_index = ordering_index[:, valid_min:valid_max+1]
-        emission_times = self.emission_times[valid_min:valid_max+1]
-
-        #Convert to 2d and plot
-        a_priori = Plot.expandVariable(emission_times, self.level_heights, ordering_index, self.x_a)
-        a_posteriori = Plot.expandVariable(emission_times, self.level_heights, ordering_index, self.x)
-        return Plot.plotAshInv(emission_times, self.level_heights, self.volcano_altitude, a_priori, a_posteriori, fig=fig)
-
 
 
     def iterative_inversion(self, solver='direct',
@@ -740,11 +723,6 @@ class AshInversion():
             if (output_fig_file is not None):
                 path, ext = os.path.splitext(output_fig_file)
 
-                fig = self.plotAshInv()
-                plt.suptitle("Iteration {:d}, residual={:f}, solver={:s}".format(i, res, solver))
-                fig.savefig("{:s}{:03d}{:s}".format(path, i, ext), metadata=output_fig_meta)
-                plt.close()
-
                 fig = self.plotAshInvMatrix(matrix=G)
                 plt.suptitle("Iteration {:d}, residual={:f}, solver={:s}".format(i, res, solver))
                 fig.savefig("{:s}{:03d}_G{:s}".format(path, i, ext), metadata=output_fig_meta)
@@ -788,13 +766,6 @@ class AshInversion():
             self.logger.info("Converged!")
         else:
             self.logger.warning("Solution did not converge!")
-
-        #Plot final results
-        if (output_fig_file is not None):
-            fig = self.plotAshInv()
-            plt.suptitle("Ash Inversion Results (Converged={:s}, Residual={:f}, Solver={:s})".format(str(converged), res, solver))
-            fig.savefig(output_fig_file, metadata=output_fig_meta)
-            plt.close()
 
 
 

@@ -23,6 +23,9 @@
 #                                                                            #
 ##############################################################################
 
+if __name__ == "__main__":
+    import matplotlib as mpl
+    mpl.use('Agg')
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -34,10 +37,15 @@ import os
 
 
 
-def makePlotFromJson(json_filename, outfile, colormap):
+def makePlotFromJson(json_filename, outfile, kwargs={}):
     emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, meta = readJson(json_filename)
-    fig = plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, colormap=colormap)
-    saveFig(outfile, fig, meta)
+    fig = plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, kwargs)
+
+    basename, ext = os.path.splitext(os.path.abspath(args.json))
+    if (ext == 'pdf'):
+        saveFig(outfile, fig, meta)
+    else:
+        fig.savefig(outfile)
 
 
 def readJson(json_filename):
@@ -95,7 +103,7 @@ def saveFig(filename, fig, metadata):
         pdf.savefig(fig)
 
 
-def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, fig=None, usetex=False, colormap='default'):
+def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, kwargs={}):
 
     def npTimeToDatetime(np_time):
         return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's'))
@@ -103,26 +111,14 @@ def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_post
     def npTimeToStr(np_time, fmt="%Y-%m-%d %H:%M"):
         return npTimeToDatetime(np_time).strftime(fmt)
 
-    #Make axis labels
-    x_ticks = np.arange(0, emission_times.size)
-    x_labels = [npTimeToStr(t, fmt="%d %b\n%H:%M") for t in emission_times]
-    x_ticks = x_ticks[3::8]
-    x_labels = x_labels[3::8]
-
-    y_ticks = np.arange(-0.5, level_heights.size+0.5)
-    y_labels = ["{:.0f}".format(a) for a in np.cumsum(np.concatenate(([volcano_altitude], level_heights)))]
-    y_ticks = y_ticks[::2]
-    y_labels = y_labels[::2]
-
-    if (colormap == 'default'):
-        colors = [
-            (0.0, (1.0, 1.0, 0.8)),
-            (0.05, (0.0, 1.0, 0.0)),
-            (0.4, (0.9, 1.0, 0.2)),
-            (0.6, (1.0, 0.0, 0.0)),
-            (1.0, (0.6, 0.2, 1.0))
-        ]
-    elif (colormap == 'alternative'):
+    colors = [
+        (0.0, (1.0, 1.0, 0.8)),
+        (0.05, (0.0, 1.0, 0.0)),
+        (0.4, (0.9, 1.0, 0.2)),
+        (0.6, (1.0, 0.0, 0.0)),
+        (1.0, (0.6, 0.2, 1.0))
+    ]
+    if (kwargs['colormap'] == 'alternative'):
         colors = [
             (0.0, (1.0, 1.0, 0.6)),
             (0.4, (0.9, 1.0, 0.2)),
@@ -132,7 +128,7 @@ def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_post
             (0.9, (1.0, 0.2, 0.6)),
             (1.0, (0.6, 0.2, 1.0))
         ]
-    elif (colormap == 'birthe'):
+    elif (kwargs['colormap'] == 'birthe'):
         colors = [
             ( 0/35, ("#ffffff")),
             ( 4/35, ("#b2e5f9")),
@@ -144,63 +140,83 @@ def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_post
     cm = LinearSegmentedColormap.from_list('ash', colors, N=256)
     cm.set_bad(alpha = 0.0)
 
+    if (kwargs['orientation'] == 'horizontal'):
+        fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(3*kwargs['fig_width'],kwargs['fig_height']), dpi=kwargs['dpi'])
+    elif (kwargs['orientation'] == 'vertical'):
+        fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(kwargs['fig_width'],3*kwargs['fig_height']), dpi=kwargs['dpi'])
 
+    #Create x ticks and y ticks
+    x_ticks = np.arange(0, emission_times.size)
+    x_labels = [npTimeToStr(t, fmt=kwargs['axis_date_format']) for t in emission_times]
+    y_ticks = np.arange(-0.5, level_heights.size+0.5)
+    y_labels = ["{:.0f}".format(a) for a in np.cumsum(np.concatenate(([volcano_altitude], level_heights)))]
+
+    if (kwargs['prune']):
+        to_keep = max(np.flatnonzero(a_priori.sum(axis=1) > 0)) + 1
+        a_priori = a_priori[:to_keep,:]
+        a_posteriori = a_posteriori[:to_keep,:]
+        y_ticks = y_ticks[:to_keep+1]
+        y_labels = y_labels[:to_keep+1]
+
+    #Subsample x ticks / y ticks
+    x_ticks = x_ticks[3::8]
+    x_labels = x_labels[3::8]
+    y_ticks = y_ticks[::2]
+    y_labels = y_labels[::2]
 
     y_max = max(1.0e-10, 1.3*max(a_priori.sum(axis=0).max(), a_posteriori.sum(axis=0).max()))
 
     diff = (a_posteriori-a_priori) / a_priori
-    diff_range = 0.5 #np.max(np.abs(diff))
+    diff_range = 0.75 #np.max(np.abs(diff))
     x_range = max(a_priori.max(), a_posteriori.max())
 
-    if (fig is None):
-        fig = plt.figure(figsize=(14,4), dpi=200)
-
     # First subfigure (a priori)
-    ax1 = plt.subplot(1,3,1)
+    plt.sca(axs[0])
     plt.title("A priori")
     plt.imshow(a_priori, aspect='auto', interpolation='none', origin='lower', cmap=cm, vmin=0.0, vmax=x_range)
     plt.colorbar(orientation='horizontal', pad=0.15)
-    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
-    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
+    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=kwargs['usetex'])
+    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=kwargs['usetex'])
 
-    ax2 = ax1.twinx()
-    ax2.autoscale(False)
-    plt.plot(a_priori.sum(axis=0), 'kx--', linewidth=2, alpha=0.5, label='A priori')
-    plt.ylim(0, y_max)
-    plt.grid()
-    plt.legend()
+    if (kwargs['plotsum']):
+        plt.sca(axs[0].twinx())
+        plt.autoscale(False)
+        plt.plot(a_priori.sum(axis=0), 'kx--', linewidth=2, alpha=0.5, label='A priori')
+        plt.ylim(0, y_max)
+        plt.grid()
+        plt.legend()
 
     #Second subfigure (a posteriori)
-    ax1 = plt.subplot(1,3,2)
+    plt.sca(axs[1])
     plt.title("Inverted")
     plt.imshow(a_posteriori, aspect='auto', interpolation='none', origin='lower', cmap=cm, vmin=0.0, vmax=x_range)
     plt.colorbar(orientation='horizontal', pad=0.15)
-    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
-    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
+    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=kwargs['usetex'])
+    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=kwargs['usetex'])
 
-    ax2 = ax1.twinx()
-    ax2.autoscale(False)
-    plt.plot(a_priori.sum(axis=0), 'kx--', linewidth=2, alpha=0.5, label='A priori')
-    plt.plot(a_posteriori.sum(axis=0), 'ko-', fillstyle='none', label='Inverted')
-    plt.ylim(0, y_max)
-    plt.grid()
-    plt.legend()
+    if (kwargs['plotsum']):
+        plt.sca(axs[1].twinx())
+        plt.autoscale(False)
+        plt.plot(a_priori.sum(axis=0), 'kx--', linewidth=2, alpha=0.5, label='A priori')
+        plt.plot(a_posteriori.sum(axis=0), 'ko-', fillstyle='none', label='Inverted')
+        plt.ylim(0, y_max)
+        plt.grid()
+        plt.legend()
 
     #Third subfigure (difference)
-    plt.subplot(1,3,3)
+    plt.sca(axs[2])
     plt.title("Inverted - A priori")
     plt.imshow(diff, aspect='auto',
         interpolation='none',
         origin='lower',
         cmap='bwr', vmin=-diff_range, vmax=diff_range)
     plt.colorbar(orientation='horizontal', pad=0.15)
-    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
-    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
-    plt.grid()
+    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=kwargs['usetex'])
+    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=kwargs['usetex'])
 
     #Set tight layout to minimize overlap
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
+    #plt.tight_layout()
+    #plt.subplots_adjust(top=0.9)
 
     return fig
 
@@ -277,13 +293,28 @@ def plotAshInvMatrix(matrix, fig=None, downsample=True):
 if __name__ == "__main__":
     import configargparse
 
-    plt.rc('font',**{'family':'serif','serif':['Times']})
-    plt.rc('text', usetex=True)
+    def str2bool(v):
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
 
     parser = configargparse.ArgParser(description='Plot from ash inversion.')
     parser.add("-j", "--json", type=str, help="JSON-file to plot", default=None, required=True)
     parser.add("-o", "--output", type=str, help="Output file", default=None)
-    parser.add("-c", "--colormap", type=str, help="Colormap to use", default='default')
+    parser.add("--colormap", type=str, help="Colormap to use", default='default')
+    parser.add("--usetex", type=str2bool, help="Use latex", nargs='?', const=True, default=True)
+    parser.add("--plotsum", type=str2bool, help="Plot sum of emitted ash", nargs='?', const=True, default=True)
+    parser.add("--prune", type=str2bool, help="Prune empty elevations", nargs='?', const=True, default=True)
+    parser.add("--orientation", type=str, help="Orientation of figures (vertical|horizontal)", default='vertical')
+    parser.add("--axis_date_format", type=str, help="Date format for axis", default="%d %b\n%H:%M")
+    parser.add("--dpi", type=int, help="Dots per inch", default=200)
+    parser.add("--fig_width", type=float, help="Width of each subfigure", default=6)
+    parser.add("--fig_height", type=float, help="Height of each subfigure", default=4)
     args = parser.parse_args()
 
     print("Arguments: ")
@@ -297,6 +328,10 @@ if __name__ == "__main__":
         basename, ext = os.path.splitext(os.path.abspath(args.json))
         outfile = basename + ".pdf"
 
+    if args.usetex:
+        plt.rc('font',**{'family':'serif','serif':['Times']})
+        plt.rc('text', usetex=True)
+
     if (args.json is not None):
         print("Writing output to " + outfile)
-        makePlotFromJson(args.json, outfile, args.colormap)
+        makePlotFromJson(args.json, outfile, vars(args))

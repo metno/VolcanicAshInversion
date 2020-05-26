@@ -135,6 +135,12 @@ for SOLVER in "${SOLVERS[@]}"; do
                     --variable 'a_posteriori_2d' \
                     --output "$RESULTS_DIR/$SOLVER/a_posteriori.csv" \
                     --json "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.json"
+    inv_exec $SCRIPT_DIR/AshInv/Plot.py \
+                    --plotsum=False \
+                    --colormap birthe \
+                    --usetex=False \
+                    --json "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.json" \
+                    --output "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.png"
 
     #Symlink system matrix for subsequent runs.
     if [ ! -e $SYSTEM_MATRIX_FILE ]; then
