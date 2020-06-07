@@ -108,44 +108,48 @@ inv_exec echo "INFO: Done matching files"
 
 #Run inversion procedure
 #SOLVERS=("direct" "inverse" "pseudo_inverse" "lstsq" "lstsq2" "nnls" "nnls2" "lsq_linear" "lsq_linear2")
-SOLVERS=("direct" "inverse" "pseudo_inverse" "lstsq2" "nnls" "nnls2" "lsq_linear2")
+#SOLVERS=("direct" "inverse" "pseudo_inverse" "lstsq2" "nnls" "nnls2" "lsq_linear2")
+SOLVERS=("direct")
 for SOLVER in "${SOLVERS[@]}"; do
+    inv_exec echo "INFO: Using solver $SOLVER"
 
+    RUN_RESULTS_DIR="$RESULTS_DIR/${SOLVER}"
+
+    #Check if we have existing system matrix
     SYSTEM_MATRIX=""
     if [ -e $SYSTEM_MATRIX_FILE ]; then
         inv_exec echo "*** WARNING ***: Using existing system matrix"
         SYSTEM_MATRIX="--input_unscaled=$SYSTEM_MATRIX_FILE"
     fi
 
-    inv_exec echo "INFO: Using solver $SOLVER"
     inv_exec $SCRIPT_DIR/AshInv/AshInversion.py \
                     --config "$RUN_CONF_INVERSION" \
                     --matched_files "$OUT_DIR/matched_files/matched_files.csv" \
                     --a_priori_file "$RESULTS_DIR/a_priori.json" \
                     --solver $SOLVER \
                     $SYSTEM_MATRIX \
-                    --output_dir "$RESULTS_DIR/$SOLVER"
+                    --output_dir "$RUN_RESULTS_DIR"
 
-    inv_exec echo "INFO: $SOLVER done, creating a posteriori emission source file"
+    #Symlink system matrix for subsequent runs.
+    if [ ! -e $SYSTEM_MATRIX_FILE ]; then
+        inv_exec ln -s "$RUN_RESULTS_DIR/inversion_system_matrix.npz" $SYSTEM_MATRIX_FILE
+    fi
+
     inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
                     --variable 'a_priori_2d' \
-                    --output "$RESULTS_DIR/$SOLVER/a_priori.csv" \
-                    --json "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.json"
+                    --output "$RUN_RESULTS_DIR/a_priori.csv" \
+                    --json "$RUN_RESULTS_DIR/inversion_a_posteriori.json"
     inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
                     --variable 'a_posteriori_2d' \
-                    --output "$RESULTS_DIR/$SOLVER/a_posteriori.csv" \
-                    --json "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.json"
+                    --output "$RUN_RESULTS_DIR/a_posteriori.csv" \
+                    --json "$RUN_RESULTS_DIR/inversion_a_posteriori.json"
     inv_exec $SCRIPT_DIR/AshInv/Plot.py \
                     --plotsum=False \
                     --colormap birthe \
                     --usetex=False \
-                    --json "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.json" \
-                    --output "$RESULTS_DIR/$SOLVER/inversion_a_posteriori.png"
-
-    #Symlink system matrix for subsequent runs.
-    if [ ! -e $SYSTEM_MATRIX_FILE ]; then
-        inv_exec ln -s "$RESULTS_DIR/$SOLVER/inversion_system_matrix.npz" $SYSTEM_MATRIX_FILE
-    fi
+                    --json "$RUN_RESULTS_DIR/inversion_a_posteriori.json" \
+                    --output "$RUN_RESULTS_DIR/inversion_a_posteriori.png"
+    inv_exec echo "INFO: solver $SOLVER done"
 done
 
 inv_exec echo "INFO: Done with inversion procedure"

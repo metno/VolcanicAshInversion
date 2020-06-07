@@ -550,7 +550,7 @@ class AshInversion():
         DTD = np.matmul(D.transpose(), D)
 
         #These solvers do not change a priori uncertainty - no use in using multiple iterations
-        if (solver=='nnls' or solver == 'lstsq'):
+        if (solver=='nnls' or solver == 'lstsq' or a_priori_epsilon == 0.0):
             max_iter = 1
 
         converged = False
@@ -824,7 +824,7 @@ if __name__ == '__main__':
     solver_args = parser.add_argument_group('Solver arguments')
     solver_args.add("--solver", type=str, default='direct',
                         help="Solver to use")
-    solver_args.add("--a_priori_epsilon", type=float, default=0.5,
+    solver_args.add("--a_priori_epsilon", type=float, action="append", default=[0.5],
                         help="How much to weight a priori info")
     solver_args.add("--smoothing_epsilon", type=float, default=1.0e-3,
                         help="How smooth the solution should be")
@@ -917,29 +917,30 @@ if __name__ == '__main__':
 
     #Run iterative inversion
     print("Running iterative inversion")
-    ash_inv.iterative_inversion(smoothing_epsilon=args.smoothing_epsilon,
-                            a_priori_epsilon=args.a_priori_epsilon,
-                            max_iter=args.max_iter,
-                            solver=args.solver,
-                            output_fig_file=output_basename + "_result.png",
-                            output_fig_meta=run_meta)
+    for eps in args.a_priori_epsilon:
+        ash_inv.iterative_inversion(smoothing_epsilon=args.smoothing_epsilon,
+                                a_priori_epsilon=eps,
+                                max_iter=args.max_iter,
+                                solver=args.solver,
+                                output_fig_file=output_basename + "_result.png",
+                                output_fig_meta=run_meta)
 
-    #Save inverted result as JSON file (similar to a priori)
-    output_file = output_basename + "_a_posteriori.json"
-    print("Writing output to {:s}".format(output_file))
-    with open(output_file, 'w') as outfile:
-        output = {
-            'a_posteriori_2d': ash_inv.x.tolist(),
-            'a_priori_2d': ash_inv.x_a.tolist(),
-            'ordering_index': ash_inv.ordering_index.tolist(),
-            'volcano_altitude': ash_inv.volcano_altitude,
-            'level_heights': ash_inv.level_heights.tolist(),
-            'emission_times': ash_inv.emission_times.tolist(),
-            'residual': ash_inv.residual,
-            'convergence': ash_inv.convergence
-        }
-        output.update(run_meta)
-        json.dump(output, outfile)
+        #Save inverted result as JSON file (similar to a priori)
+        output_file = "{:s}_a_posteriori_{:f}.json".format(output_basename, eps)
+        print("Writing output to {:s}".format(output_file))
+        with open(output_file, 'w') as outfile:
+            output = {
+                'a_posteriori_2d': ash_inv.x.tolist(),
+                'a_priori_2d': ash_inv.x_a.tolist(),
+                'ordering_index': ash_inv.ordering_index.tolist(),
+                'volcano_altitude': ash_inv.volcano_altitude,
+                'level_heights': ash_inv.level_heights.tolist(),
+                'emission_times': ash_inv.emission_times.tolist(),
+                'residual': ash_inv.residual,
+                'convergence': ash_inv.convergence
+            }
+            output.update(run_meta)
+            json.dump(output, outfile)
 
     #Exit
     print("Inversion procedure complete - output in {:s}".format(args.output_dir))

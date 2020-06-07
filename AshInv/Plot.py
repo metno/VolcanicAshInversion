@@ -38,8 +38,8 @@ import os
 
 
 def makePlotFromJson(json_filename, outfile, kwargs={}):
-    emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, meta = readJson(json_filename)
-    fig = plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, kwargs)
+    emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, residual, convergence, meta = readJson(json_filename)
+    fig = plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, residual, convergence, kwargs)
 
     basename, ext = os.path.splitext(os.path.abspath(args.json))
     if (ext == 'pdf'):
@@ -55,6 +55,9 @@ def readJson(json_filename):
 
     #Parse data
     json_data = json.loads(json_string)
+
+    #Add filename to json_data
+    json_data["filename"] = os.path.abspath(json_filename)
 
     #Copy only data we care about
     emission_times = np.array(json_data["emission_times"], dtype='datetime64[ns]')
@@ -81,7 +84,7 @@ def readJson(json_filename):
     x = expandVariable(emission_times, level_heights, ordering_index, a_posteriori_2d)
     x_a = expandVariable(emission_times, level_heights, ordering_index, a_priori_2d)
 
-    return emission_times, level_heights, volcano_altitude, x_a, x, json.dumps(json_data, indent=4)
+    return emission_times, level_heights, volcano_altitude, x_a, x, residual, convergence, json.dumps(json_data, indent=4)
 
 
 
@@ -103,7 +106,7 @@ def saveFig(filename, fig, metadata):
         pdf.savefig(fig)
 
 
-def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, kwargs={}):
+def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_posteriori, residual, convergence, kwargs={}):
 
     def npTimeToDatetime(np_time):
         return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's'))
@@ -141,9 +144,9 @@ def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_post
     cm.set_bad(alpha = 0.0)
 
     if (kwargs['orientation'] == 'horizontal'):
-        fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(3*kwargs['fig_width'],kwargs['fig_height']), dpi=kwargs['dpi'])
+        fig, axs = plt.subplots(nrows=1, ncols=4, figsize=(4*kwargs['fig_width'],kwargs['fig_height']), dpi=kwargs['dpi'])
     elif (kwargs['orientation'] == 'vertical'):
-        fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(kwargs['fig_width'],3*kwargs['fig_height']), dpi=kwargs['dpi'])
+        fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(kwargs['fig_width'],4*kwargs['fig_height']), dpi=kwargs['dpi'])
 
     #Create x ticks and y ticks
     x_ticks = np.arange(0, emission_times.size)
@@ -205,7 +208,7 @@ def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_post
 
     #Third subfigure (difference)
     plt.sca(axs[2])
-    plt.title("Inverted - A priori")
+    plt.title("(Inverted - A priori) / A priori")
     plt.imshow(diff, aspect='auto',
         interpolation='none',
         origin='lower',
@@ -213,6 +216,19 @@ def plotAshInv(emission_times, level_heights, volcano_altitude, a_priori, a_post
     plt.colorbar(orientation='horizontal', pad=0.15)
     plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=kwargs['usetex'])
     plt.yticks(ticks=y_ticks, labels=y_labels, usetex=kwargs['usetex'])
+
+
+    #Fourth subfigure (convergence)
+    plt.sca(axs[3])
+    plt.title("Convergence / residual")
+    plt.plot(convergence, 'r-', linewidth=2, label='Convergence')
+    plt.xlabel("Iteration")
+
+    plt.sca(axs[3].twinx())
+    plt.plot(residual, 'b-', linewidth=2, label='Residual')
+    plt.xlabel("Iteration")
+
+    plt.legend()
 
     #Set tight layout to minimize overlap
     #plt.tight_layout()
