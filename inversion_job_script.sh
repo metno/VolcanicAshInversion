@@ -135,20 +135,30 @@ for SOLVER in "${SOLVERS[@]}"; do
         inv_exec ln -s "$RUN_RESULTS_DIR/inversion_system_matrix.npz" $SYSTEM_MATRIX_FILE
     fi
 
-    inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
-                    --variable 'a_priori_2d' \
-                    --output "$RUN_RESULTS_DIR/a_priori.csv" \
-                    --json "$RUN_RESULTS_DIR/inversion_a_posteriori.json"
-    inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
-                    --variable 'a_posteriori_2d' \
-                    --output "$RUN_RESULTS_DIR/a_posteriori.csv" \
-                    --json "$RUN_RESULTS_DIR/inversion_a_posteriori.json"
-    inv_exec $SCRIPT_DIR/AshInv/Plot.py \
-                    --plotsum=False \
-                    --colormap birthe \
-                    --usetex=False \
-                    --json "$RUN_RESULTS_DIR/inversion_a_posteriori.json" \
-                    --output "$RUN_RESULTS_DIR/inversion_a_posteriori.png"
+    for RESULT_JSON in $RUN_RESULTS_DIR/inversion_*_a_posteriori.json; do
+
+        # A priori is equal for all runs, convert once
+        if [ ! -e "$RUN_RESULTS_DIR/a_priori.csv" ]; then
+            inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
+                            --variable 'a_priori_2d' \
+                            --output "$RUN_RESULTS_DIR/a_priori.csv" \
+                            --json $RESULT_JSON
+        fi
+
+        # Convert a posteriori to csv and plot
+        RESULT_CSV="${RESULT_JSON%.*}".csv
+        RESULT_PNG="${RESULT_JSON%.*}".png
+        inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
+                        --variable 'a_posteriori_2d' \
+                        --json $RESULT_JSON \
+                        --output $RESULT_CSV 
+        inv_exec $SCRIPT_DIR/AshInv/Plot.py \
+                        --plotsum=False \
+                        --colormap birthe \
+                        --usetex=False \
+                        --json $RESULT_JSON \
+                        --output $RESULT_PNG
+    done
     inv_exec echo "INFO: solver $SOLVER done"
 done
 

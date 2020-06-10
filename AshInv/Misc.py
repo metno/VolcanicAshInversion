@@ -141,3 +141,48 @@ def get_hybrid_layer_thickness(Ps, layer, hyai, hybi, P0=1013.25):
     meters_1 = hybrid_to_meters(Ps, hyai[layer+1], hybi[layer+1], P0=P0)
 
     return meters_0 - meters_1
+
+
+def delete_in_place(matrix, to_keep_rows=None, to_keep_cols=None, selftest=True):
+    """Reshapes in place by moving data (slow but requires far less memory)."""
+    rows, cols = matrix.shape
+
+    #Perform a self test by default to check that the approach still works as intended
+    if (selftest):
+        a = np.random.randint(low=0, high=5, size=(50, 30))
+        st_rows = np.round(np.random.random((a.shape[0])).ravel()).astype(np.bool)
+        st_cols = np.round(np.random.random((a.shape[1])).ravel()).astype(np.bool)
+        c = a[st_rows,:]
+        c = c[:,st_cols]
+        b = delete_in_place(a, st_rows, st_cols, selftest=False)
+        b.resize((np.count_nonzero(st_rows), np.count_nonzero(st_cols)))
+        assert np.array_equal(b, c), "Something is wrong with delete_in_place"
+        assert b.__array_interface__['data'][0] == a.__array_interface__['data'][0]
+
+    #Remove rows in place
+    if to_keep_rows is not None:
+        k=0
+        for l, keep in enumerate(to_keep_rows):
+            if (keep):
+                matrix[k,:] = matrix[l,:]
+                k += 1
+            else:
+                pass
+        rows = k
+
+    #Remove cols in place
+    if to_keep_cols is not None:
+        src = np.flatnonzero(to_keep_cols)
+        nnz = len(src)
+        dst = np.arange(nnz)
+
+        flat = matrix.ravel()
+        for k in range(rows):
+            s = src+k*cols
+            d = dst+k*nnz
+            flat[d] = flat[s]
+        cols = nnz
+
+    matrix.resize((rows, cols), refcheck=False)
+    return matrix
+    #return np.resize(matrix, (rows, cols))

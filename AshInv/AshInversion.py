@@ -28,7 +28,7 @@ import pandas as pd
 import datetime
 import logging
 import pprint
-import datetime
+import time
 from netCDF4 import Dataset, num2date
 import glob
 import os
@@ -42,7 +42,7 @@ import psutil
 from matplotlib import pyplot as plt
 import matplotlib.colors
 
-from AshInv import Plot
+from AshInv import Plot, Misc
 
 class AshInversion():
     def __init__(self, verbose=0):
@@ -92,7 +92,9 @@ class AshInversion():
                     delete_idx += 1
 
         if hasattr(self, 'M'):
-            self.M = np.delete(self.M, to_delete, axis=1)
+            to_keep = np.ones((self.M.shape[1]), dtype=np.bool)
+            to_keep[to_delete] = False
+            self.M = Misc.delete_in_place(self.M, to_keep_cols=to_keep)
         self.x_a = np.delete(self.x_a, to_delete)
         self.sigma_x = np.delete(self.sigma_x, to_delete)
 
@@ -200,10 +202,10 @@ class AshInversion():
         #Remove timesteps from a priori that don't match up with matched files (make system matrix far smaller)
         matched_times = np.array(matched_files_df["date"], dtype='datetime64[ns]')
         remove = np.ones((self.level_heights.size, self.emission_times.size), dtype=np.bool)
-        for t, time in enumerate(self.emission_times):
+        for t, emission_time in enumerate(self.emission_times):
             min_days=0
             max_days=6,
-            deltas = (matched_times - time) / np.timedelta64(1, 'D')
+            deltas = (matched_times - emission_time) / np.timedelta64(1, 'D')
             valid = (deltas >= min_days) & (deltas < max_days)
             if np.any(valid):
                 remove[:,t] = False
@@ -216,15 +218,17 @@ class AshInversion():
         assert num_emissions == (self.ordering_index.max()+1), "Ordering index has wrong entries!"
         self.logger.info("Memory available pre alloc: {:.1f} MB".format(psutil.virtual_memory().available/(1024*1024)))
         self.logger.info("Will try to allocate {:d}x{:d} matrix ({:.1f} MB)".format(total_num_obs, num_emissions, total_num_obs*num_emissions*8/(1024*1024)))
-        M = np.zeros((total_num_obs, num_emissions), dtype=np.float64)
-        y_0 = np.empty((total_num_obs), dtype=np.float64)
-        sigma_o = np.empty((total_num_obs), dtype=np.float64)
+        self.M = np.zeros((total_num_obs, num_emissions), dtype=np.float64)
+        self.y_0 = np.empty((total_num_obs), dtype=np.float64)
+        self.sigma_o = np.empty((total_num_obs), dtype=np.float64)
         self.logger.info("Memory post alloc: {:.1f} MB".format(psutil.virtual_memory().available/(1024*1024)))
 
         #RHS vectors of observations (b) and uncertainties (b_sigma)
         obs_counter = 0
 
         #Loop over all observations and assemble row by row into matrix
+        n_removed = 0
+        start_assembly = time.time()
         for row in matched_files_df.itertuples():
             gc.collect()
 
@@ -237,10 +241,13 @@ class AshInversion():
 
             #Print progress every 10% of files
             if ((row.Index+1) % max(1, (num_files // 10)) == 0):
-                self.logger.info("Processing file {:d}/{:d}: {:02.0f} % completed".format(
+                percent_complete = (100*(obs_counter+n_removed+1)) / total_num_obs
+                eta = (time.time()-start_assembly)/percent_complete*(100-percent_complete)
+                self.logger.info("Processing file {:d}/{:d}: {:02.0f} % completed. ETA={:s}".format(
                     (row.Index+1),
                     num_files,
-                    (100*(obs_counter+1)) // total_num_obs))
+                    percent_complete,
+                    str(datetime.timedelta(seconds=eta))))
 
             if(row.num_observations == 0):
                 continue
@@ -248,10 +255,10 @@ class AshInversion():
             with Dataset(filename) as nc_file:
                 #Get the indices for the time which corresponds to the a-priori data
                 unit = nc_file['time'].units
-                time = num2date(nc_file['time'][:], units = unit).astype('datetime64[ns]')
+                times = num2date(nc_file['time'][:], units = unit).astype('datetime64[ns]')
                 #time_index = np.flatnonzero(np.isin(self.emission_times, time))
-                time_index = np.full(time.shape, -1, dtype=np.int32)
-                for i, t in enumerate(time):
+                time_index = np.full(times.shape, -1, dtype=np.int32)
+                for i, t in enumerate(times):
                     ix = np.flatnonzero(self.emission_times == t)
                     if (len(ix) == 0):
                         self.logger.debug("Time {:s} is from {:s} does not match up with a priori emission!".format(str(t), filename))
@@ -262,7 +269,7 @@ class AshInversion():
                         time_index[i] = ix[0]
 
                 if (self.args['verbose'] > 70):
-                    self.logger.debug("File times: {:s}, \na priori times: {:s}, \nindices: {:s}".format(str(time), str(self.emission_times), str(time_index)))
+                    self.logger.debug("File times: {:s}, \na priori times: {:s}, \nindices: {:s}".format(str(times), str(self.emission_times), str(time_index)))
                 if (self.args['verbose'] > 90):
                     self.logger.debug("Time indices: {:s}".format(str(time_index)))
 
@@ -280,8 +287,8 @@ class AshInversion():
                     obs_alt = obs_alt[mask]
 
                 #Read timestep by timestep in case of many timesteps (out of memory)
-                sim = np.empty((len(time), row.num_altitudes, n_obs))
-                for t in range(len(time)):
+                sim = np.empty((len(times), row.num_altitudes, n_obs))
+                for t in range(len(times)):
                     s = nc_file['sim'][t,:,:,:]
                     sim[t,:,:] = s[:,mask]
 
@@ -303,7 +310,7 @@ class AshInversion():
                         obs_alt = obs_alt[keep]
                     sim = sim[:,:,keep]
                     n_obs -= n_remove_af
-                    total_num_obs -= n_remove_af
+                    n_removed += n_remove_af
 
                 #Thinning observations of no ash observations:
                 n_remove_zero = 0
@@ -321,8 +328,15 @@ class AshInversion():
                             obs_alt = obs_alt[keep]
                         sim = sim[:,:,keep]
                         n_obs -= n_remove_zero
-                        total_num_obs -= n_remove_zero
-                self.logger.info("Added {:d}/{:d} observations (removed {:d} uncertain, and {:d}/{:d} zeroes)".format(n_obs, row.num_observations, n_remove_af, n_remove_zero, n_total_zero))
+                        n_removed += n_remove_zero
+                self.logger.info("File {:d}/{:d}: Added {:d}/{:d} observations (removed {:d} uncertain, and {:d}/{:d} zeroes)".format(
+                    (row.Index+1),
+                    num_files,
+                    n_obs,
+                    row.num_observations,
+                    n_remove_af,
+                    n_remove_zero,
+                    n_total_zero))
 
                 #  Assemble system matrix
                 for o in range(n_obs):
@@ -332,11 +346,11 @@ class AshInversion():
                                 val = sim[t, a, o]
                                 emission_index = self.ordering_index[a, time_index[t]]
                                 if emission_index >= 0 and not np.ma.is_masked(val):
-                                    M[obs_counter, emission_index] = val
+                                    self.M[obs_counter, emission_index] = val
 
                     #FIXME Birthe uses constant standard deviation here.
-                    y_0[obs_counter] = obs[o]
-                    sigma_o[obs_counter] = y_0[obs_counter]*1.0
+                    self.y_0[obs_counter] = obs[o]
+                    self.sigma_o[obs_counter] = self.y_0[obs_counter]*1.0
                     obs_counter = obs_counter+1
 
                     #This part implements top of ash cloud observation into the system
@@ -351,25 +365,22 @@ class AshInversion():
                                 if time_index[t] >= 0:
                                     emission_index = self.ordering_index[a, time_index[t]]
                                     if (emission_index >= 0):
-                                        M[obs_counter, emission_index] = M[obs_counter-1, emission_index]
-                                        M[obs_counter-1, emission_index] = 0
+                                        self.M[obs_counter, emission_index] = self.M[obs_counter-1, emission_index]
+                                        self.M[obs_counter-1, emission_index] = 0
 
                         #FIXME What should the standard deviation be here?
-                        y_0[obs_counter] = 0.0 #Zero oserved ash here
-                        sigma_o[obs_counter] = 0.0
+                        self.y_0[obs_counter] = 0.0 #Zero oserved ash here
+                        self.sigma_o[obs_counter] = 0.0
                         obs_counter = obs_counter+1
 
 
         #Finally resize matrix to match actually used observations
-        self.logger.info("Reshaping M from {:d} to {:d} rows".format(M.shape[0], obs_counter))
-        M = M[:obs_counter,:]
-        y_0 = y_0[:obs_counter]
-        sigma_o = sigma_o[:obs_counter]
-
-        #Save in class
-        self.M = M #System matrix
-        self.y_0 = y_0 #Right hand side observations
-        self.sigma_o = sigma_o #Observation stdev
+        self.logger.info("Reshaping M from {:d} to {:d} rows".format(self.M.shape[0], obs_counter))
+        rows_to_keep = np.zeros(self.M.shape[0], dtype=np.bool)
+        rows_to_keep[:obs_counter] = True
+        self.M = Misc.delete_in_place(self.M, rows_to_keep)
+        self.y_0 = self.y_0[:obs_counter]
+        self.sigma_o = self.sigma_o[:obs_counter]
 
         self.logger.debug("System matrix created.")
 
@@ -394,9 +405,9 @@ class AshInversion():
 
     def plotAshInvMatrix(self, fig=None, matrix=None, downsample=True):
         if (matrix is None):
-            matrix = self.M
-
-        return Plot.plotAshInvMatrix(matrix, fig, downsample)
+            return Plot.plotAshInvMatrix(self.M, fig, downsample)
+        else:
+            return Plot.plotAshInvMatrix(matrix, fig, downsample)
 
 
 
@@ -405,16 +416,16 @@ class AshInversion():
         Load matrices from file
         """
         self.logger.info("Initializing from existing matrices")
-        with np.load(inname) as data:
-            self.M = data['M']
-            self.y_0 = data['y_0']
-            self.x_a = data['x_a']
-            self.sigma_o = data['sigma_o']
-            self.sigma_x = data['sigma_x']
-            self.ordering_index = data['ordering_index']
-            self.level_heights = data['level_heights']
-            self.volcano_altitude = data['volcano_altitude']
-            self.emission_times = data['emission_times']
+        with np.load(inname, mmap_mode='r') as data:
+            self.M = data['M'].copy()
+            self.y_0 = data['y_0'].copy()
+            self.x_a = data['x_a'].copy()
+            self.sigma_o = data['sigma_o'].copy()
+            self.sigma_x = data['sigma_x'].copy()
+            self.ordering_index = data['ordering_index'].copy()
+            self.level_heights = data['level_heights'].copy()
+            self.volcano_altitude = data['volcano_altitude'].copy()
+            self.emission_times = data['emission_times'].copy()
 
 
 
@@ -464,10 +475,6 @@ class AshInversion():
 
 
 
-
-
-
-
     def prune_system(self,
                      rowsum_threshold=None,
                      colsum_threshold=None,
@@ -484,7 +491,7 @@ class AshInversion():
             n_remove = nonzero_rows.size - np.count_nonzero(nonzero_rows)
             self.logger.info("Removing {:d} all zero rows from M".format(n_remove))
             if (n_remove > 0):
-                self.M = self.M[nonzero_rows,:]
+                self.M = Misc.delete_in_place(self.M, to_keep_rows=nonzero_rows)
                 self.y_0 = self.y_0[nonzero_rows]
                 self.sigma_o = self.sigma_o[nonzero_rows]
 
@@ -725,7 +732,7 @@ class AshInversion():
 
                 fig = self.plotAshInvMatrix(matrix=G)
                 plt.suptitle("Iteration {:d}, residual={:f}, solver={:s}".format(i, res, solver))
-                fig.savefig("{:s}{:03d}_G{:s}".format(path, i, ext), metadata=output_fig_meta)
+                fig.savefig("{:s}_{:03d}_G{:s}".format(path, i, ext), metadata=output_fig_meta)
                 plt.close()
 
             #Save matrices as npz file (useful for debugging)
@@ -885,9 +892,13 @@ if __name__ == '__main__':
                                 use_elevations=args.use_elevations
                                 )
         ash_inv.save_matrices(unscaled_file)
-        fig = ash_inv.plotAshInvMatrix()
-        fig.savefig(output_basename + "_system_matrix_full.png", metadata=run_meta)
-        plt.close()
+        try:
+            fig = ash_inv.plotAshInvMatrix()
+            fig.savefig(output_basename + "_system_matrix_full.png", metadata=run_meta)
+            plt.close()
+        except MemoryError:
+            self.logger.warning("Unable to plot matrix - out of memory")
+            pass
 
     #Prune system matrix
     if (args.prune):
@@ -900,9 +911,13 @@ if __name__ == '__main__':
         if (ash_inv.M.size == 0):
             print("System matrix pruned to zero size (i.e., no observations match any of the simulations)... Exiting")
             sys.exit(-1)
-        fig = ash_inv.plotAshInvMatrix()
-        fig.savefig(output_basename + "_system_matrix_pruned.png", metadata=run_meta)
-        plt.close()
+        try:
+            fig = ash_inv.plotAshInvMatrix()
+            fig.savefig(output_basename + "_system_matrix_pruned.png", metadata=run_meta)
+            plt.close()
+        except MemoryError:
+            self.logger.warning("Unable to plot matrix - out of memory")
+            pass
 
     #Scale system matrix
     print("Scaling system matrix")
@@ -911,22 +926,25 @@ if __name__ == '__main__':
         scale_emission=args.scale_emission,
         scale_observation=args.scale_observation
     )
-    fig = ash_inv.plotAshInvMatrix()
-    fig.savefig(output_basename + "_system_matrix_scaled.png", metadata=run_meta)
-    plt.close()
+    try:
+        fig = ash_inv.plotAshInvMatrix()
+        fig.savefig(output_basename + "_system_matrix_scaled.png", metadata=run_meta)
+        plt.close()
+    except MemoryError:
+        self.logger.warning("Unable to plot matrix - out of memory")
+        pass
 
     #Run iterative inversion
     print("Running iterative inversion")
     for eps in args.a_priori_epsilon:
+        print("Inverting with a priori epsilon={:f}".format(eps))
         ash_inv.iterative_inversion(smoothing_epsilon=args.smoothing_epsilon,
                                 a_priori_epsilon=eps,
                                 max_iter=args.max_iter,
-                                solver=args.solver,
-                                output_fig_file=output_basename + "_result.png",
-                                output_fig_meta=run_meta)
+                                solver=args.solver)
 
         #Save inverted result as JSON file (similar to a priori)
-        output_file = "{:s}_a_posteriori_{:f}.json".format(output_basename, eps)
+        output_file = "{:s}_{:f}_a_posteriori.json".format(output_basename, eps)
         print("Writing output to {:s}".format(output_file))
         with open(output_file, 'w') as outfile:
             output = {
