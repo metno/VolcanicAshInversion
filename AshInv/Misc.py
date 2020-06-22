@@ -30,6 +30,9 @@ from netCDF4 import Dataset, num2date
 from io import StringIO
 import pandas as pd
 
+from scipy.integrate import quad
+from scipy.interpolate import PPoly
+
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 
@@ -186,3 +189,30 @@ def delete_in_place(matrix, to_keep_rows=None, to_keep_cols=None, selftest=True)
     matrix.resize((rows, cols), refcheck=False)
     return matrix
     #return np.resize(matrix, (rows, cols))
+
+
+
+def resample_1D(data, old_boundaries, new_boundaries):
+    """Resamples from old bins to new bins"""
+    #0-pad data
+    eps = 10
+    data = np.hstack((0, data, 0))
+    old_boundaries = np.hstack((old_boundaries[0]-eps, old_boundaries, old_boundaries[-1]+eps))
+
+    #Create 0-order interpolating polynomial (that extrapolates 0 outside defined region)
+    poly = PPoly(data.reshape(1,-1), old_boundaries)
+
+    #Integrate polynomial using new boundaries
+    new_data = np.zeros(new_boundaries.shape[0]-1)
+    for i in range(len(new_data)):
+        new_data[i], _ = quad(poly, new_boundaries[i], new_boundaries[i+1]) / (new_boundaries[i+1] - new_boundaries[i])
+
+    return new_data
+
+def resample_2D(data, old_boundaries, new_boundaries):
+    """Resamples from old bins to new bins"""
+    new_data = np.zeros((data.shape[0], new_boundaries.shape[0]-1))
+    for i in range(data.shape[0]):
+        new_data[i,:] = resample_1D(data[i,:], old_boundaries, new_boundaries)
+
+    return new_data

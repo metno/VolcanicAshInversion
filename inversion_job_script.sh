@@ -87,7 +87,6 @@ inv_exec echo "==== Inversion run begin ===="
 # Create a priori information from plume heights estimate
 inv_exec $SCRIPT_DIR/AshInv/APriori.py \
                     --config "$RUN_CONF_A_PRIORI" \
-                    --plume_heights_file "$RUN_PLUME_HEIGHTS" \
                     --a_priori_file "$RESULTS_DIR/a_priori.json"
 inv_exec echo "INFO: Done creating a priori values"
 
@@ -151,7 +150,7 @@ for SOLVER in "${SOLVERS[@]}"; do
         inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
                         --variable 'a_posteriori_2d' \
                         --json $RESULT_JSON \
-                        --output $RESULT_CSV 
+                        --output $RESULT_CSV
         inv_exec $SCRIPT_DIR/AshInv/Plot.py \
                         --plotsum=False \
                         --colormap birthe \

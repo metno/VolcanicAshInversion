@@ -34,6 +34,7 @@ import glob
 import os
 import re
 import json
+import scipy.sparse
 import scipy.linalg
 import scipy.optimize
 import gc
@@ -417,15 +418,18 @@ class AshInversion():
         """
         self.logger.info("Initializing from existing matrices")
         with np.load(inname, mmap_mode='r') as data:
-            self.M = data['M'].copy()
-            self.y_0 = data['y_0'].copy()
-            self.x_a = data['x_a'].copy()
-            self.sigma_o = data['sigma_o'].copy()
-            self.sigma_x = data['sigma_x'].copy()
-            self.ordering_index = data['ordering_index'].copy()
-            self.level_heights = data['level_heights'].copy()
-            self.volcano_altitude = data['volcano_altitude'].copy()
-            self.emission_times = data['emission_times'].copy()
+            self.M = data['M']
+            self.y_0 = data['y_0']
+            self.x_a = data['x_a']
+            self.sigma_o = data['sigma_o']
+            self.sigma_x = data['sigma_x']
+            self.ordering_index = data['ordering_index']
+            self.level_heights = data['level_heights']
+            self.volcano_altitude = data['volcano_altitude']
+            self.emission_times = data['emission_times']
+
+        self.logger.info("System matrix size: {:s}".format(str(self.M.shape)))
+        self.logger.info("Ordering index size: {:s}".format(str(np.count_nonzero(self.ordering_index >= 0))))
 
 
 
@@ -483,6 +487,9 @@ class AshInversion():
         """
         Remove insignificant parts of the inversion system
         """
+
+        self.logger.info("System size before pruning: {:s}".format(str(self.M.shape)))
+
         #First remove all zero simulations (rows with only zeros)
         #If all simulations (columns) for a single observation (row) have zero emission,
         #they all match equally well/poorly
@@ -515,6 +522,9 @@ class AshInversion():
             if (n_remove > 0):
                 to_remove = np.isin(self.ordering_index, np.nonzero(nonzero_cols), invert=True)
                 self.make_ordering_index(to_remove)
+
+
+        self.logger.info("System size after pruning: {:s}".format(str(self.M.shape)))
 
 
 
@@ -556,6 +566,13 @@ class AshInversion():
         D[-1, -1] = -1
         DTD = np.matmul(D.transpose(), D)
 
+        #Create sparse matrix M
+        spM = scipy.sparse.csr_matrix(self.M)
+
+        #Create right hand side
+        #Y = y_0 - M x_a
+        Y = self.y_0 - np.matmul(self.M, self.x_a)
+
         #These solvers do not change a priori uncertainty - no use in using multiple iterations
         if (solver=='nnls' or solver == 'lstsq' or a_priori_epsilon == 0.0):
             max_iter = 1
@@ -568,7 +585,10 @@ class AshInversion():
             self.logger.debug("|x_a|={:f}, |sigma_x|={:f}, |y_0|={:f}, |sigma_o|={:f}".format(np.linalg.norm(self.x_a), np.linalg.norm(self.sigma_x), np.linalg.norm(self.y_0), np.linalg.norm(self.sigma_o)))
 
             #Create diagonal matrices for sigma_o^-2 and sigma_x^-2
+            """
             sigma_o_m2 = np.power(self.sigma_o, -2)
+            """
+            sigma_o_m2 = scipy.sparse.dia_matrix((np.power(self.sigma_o, -1), 0), shape=(n_obs, n_obs))
             if (a_priori_epsilon > 0):
                 sigma_x_m2 = np.power(self.sigma_x / a_priori_epsilon, -2)
             else:
@@ -576,11 +596,18 @@ class AshInversion():
 
             #Create the system matrix G
             #Compute M^T\diag(sigma_o^-2)
+            """
             MT_sigma_o = self.M.transpose().copy()
             for k in range(MT_sigma_o.shape[1]):
                 MT_sigma_o[:,k] *= sigma_o_m2[k]
+            """
             #   G = M^T diag(\sigma_o^-2) M + diag(\sigma_x^-2) + \eps D^T D
+            """
             G = np.matmul(MT_sigma_o, self.M) \
+                + np.diag(sigma_x_m2) \
+                + smoothing_epsilon * np.mean(sigma_x_m2) * DTD
+            """
+            G = (spM.transpose() * sigma_o_m2 * spM).toarray() \
                 + np.diag(sigma_x_m2) \
                 + smoothing_epsilon * np.mean(sigma_x_m2) * DTD
             #G = np.matmul(MT_sigma_o, self.M) \
@@ -588,16 +615,16 @@ class AshInversion():
             #    + smoothing_epsilon * np.mean(sigma_x_m2) * DTD
             self.logger.debug("G condition number: {:f}".format(np.linalg.cond(G)))
 
-            #Create right hand side
-            #Y = y_0 - M x_a
-            Y = self.y_0 - np.matmul(self.M, self.x_a)
+            #Right hand side
             #B = sigma_o^-2 M^T Y
-            B = np.matmul(MT_sigma_o, Y)
+            B = spM.transpose() * sigma_o_m2 * Y
 
             #Solve GX=B
             self.logger.debug("Using solver {:s}".format(solver))
             if (solver=='direct'):
                 #Uses a direct solver
+                print(B.shape)
+                print(G.shape)
                 self.x = np.linalg.solve(G, B)
                 res = np.linalg.norm(np.dot(G, self.x)-B)
                 self.logger.debug("Residual: {:f}".format(res))
@@ -714,8 +741,6 @@ class AshInversion():
                 res = np.linalg.norm(np.dot(G, self.x)-B)
                 self.logger.debug("Residual: {:f}".format(res))
                 self.x = -(self.x * r + m)
-
-
             else:
                 raise RuntimeError("Invalid solver '{:s}'".format(solver))
 
@@ -723,7 +748,7 @@ class AshInversion():
             res = np.linalg.norm(np.matmul(self.M, self.x) - self.y_0)
             self.residual += [res]
             self.logger.info("Residual |M x - y_o| = {:f}".format(res))
-            self.logger.debug("|M|={:f}, |M^t\sigma_o={:f} |G|={:f}".format(np.linalg.norm(self.M), np.linalg.norm(MT_sigma_o), np.linalg.norm(G)))
+            self.logger.debug("|M|={:f}, |G|={:f}".format(np.linalg.norm(self.M), np.linalg.norm(G)))
             self.logger.debug("|x|={:f}, |Y|={:f}, |B|={:f}".format(np.linalg.norm(self.x), np.linalg.norm(Y), np.linalg.norm(B)))
 
             #Create plots and save result
@@ -892,13 +917,9 @@ if __name__ == '__main__':
                                 use_elevations=args.use_elevations
                                 )
         ash_inv.save_matrices(unscaled_file)
-        try:
-            fig = ash_inv.plotAshInvMatrix()
-            fig.savefig(output_basename + "_system_matrix_full.png", metadata=run_meta)
-            plt.close()
-        except MemoryError:
-            self.logger.warning("Unable to plot matrix - out of memory")
-            pass
+        fig = ash_inv.plotAshInvMatrix()
+        fig.savefig(output_basename + "_system_matrix_full.png", metadata=run_meta)
+        plt.close()
 
     #Prune system matrix
     if (args.prune):
@@ -911,13 +932,10 @@ if __name__ == '__main__':
         if (ash_inv.M.size == 0):
             print("System matrix pruned to zero size (i.e., no observations match any of the simulations)... Exiting")
             sys.exit(-1)
-        try:
-            fig = ash_inv.plotAshInvMatrix()
-            fig.savefig(output_basename + "_system_matrix_pruned.png", metadata=run_meta)
-            plt.close()
-        except MemoryError:
-            self.logger.warning("Unable to plot matrix - out of memory")
-            pass
+
+        fig = ash_inv.plotAshInvMatrix()
+        fig.savefig(output_basename + "_system_matrix_pruned.png", metadata=run_meta)
+        plt.close()
 
     #Scale system matrix
     print("Scaling system matrix")
@@ -926,25 +944,35 @@ if __name__ == '__main__':
         scale_emission=args.scale_emission,
         scale_observation=args.scale_observation
     )
-    try:
-        fig = ash_inv.plotAshInvMatrix()
-        fig.savefig(output_basename + "_system_matrix_scaled.png", metadata=run_meta)
-        plt.close()
-    except MemoryError:
-        self.logger.warning("Unable to plot matrix - out of memory")
-        pass
+    fig = ash_inv.plotAshInvMatrix()
+    fig.savefig(output_basename + "_system_matrix_scaled.png", metadata=run_meta)
+    plt.close()
 
     #Run iterative inversion
-    print("Running iterative inversion")
-    for eps in args.a_priori_epsilon:
+    print("Bisection to find optimal a priori epsilon")
+    interval = [0, 1]
+    for i in range(20):
+        eps = (interval[0] + interval[1]) / 2
         print("Inverting with a priori epsilon={:f}".format(eps))
         ash_inv.iterative_inversion(smoothing_epsilon=args.smoothing_epsilon,
                                 a_priori_epsilon=eps,
                                 max_iter=args.max_iter,
                                 solver=args.solver)
 
+        #Update interval
+        valid = ash_inv.x_a > 0
+        l_inf = np.max(np.abs((ash_inv.x[valid]-ash_inv.x_a[valid]) / ash_inv.x_a[valid]))
+        print("Eps is {:f}, residual is{:f}, convergence is {:s}".format(eps, ash_inv.residual[-1], str(ash_inv.convergence)))
+        if (l_inf < 1):
+            #Maximum relative change less than 1
+            interval[1] = eps
+        else:
+            #Converges "too slowly"
+            interval[0] = eps
+        print("New interval: {:s}".format(str(interval)))
+
         #Save inverted result as JSON file (similar to a priori)
-        output_file = "{:s}_{:f}_a_posteriori.json".format(output_basename, eps)
+        output_file = "{:s}_{:03d}_{:.8f}_a_posteriori.json".format(output_basename, i, eps)
         print("Writing output to {:s}".format(output_file))
         with open(output_file, 'w') as outfile:
             output = {

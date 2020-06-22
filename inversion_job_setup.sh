@@ -40,7 +40,7 @@ fi
 
 #Initialize defaults
 CONF_DIR=${CONF_DIR:-NONE}
-OUT_DIR=${OUT_DIR:-NONE}
+RUN_DIR=${RUN_DIR:-NONE}
 TAG=${TAG:-NONE}
 QUEUE=${QUEUE:-NONE}       #qsub queue to submit to
 PROJECT=${PROJECT:-NONE}   #qsub project to use
@@ -59,7 +59,7 @@ function usage {
     echo "     --tag <some_tag>            # Tag your run (use a descriptive tag you remember!)"
     echo "     --conf <dir>                # Directory containing all relevant config files:"
     echo "                                 # "
-    echo "     [--out-dir <output_dir>]    # Explicitly set output directory"
+    echo "     [--run-dir <output_dir>]    # Explicitly set run/output directory"
     echo "     [--memory {1G|4G|16G|...}]  # Reserve x GB memory (default '$MEMORY')"
     echo "     [--memory <queue_name>]     # Submit to this queue (default '$QUEUE')"
     echo "     [--submit]                  # Submit using qsub, otherwise just set up job"
@@ -72,7 +72,7 @@ while [[ $# -gt 0 ]]; do
     case $key in
         --conf)     [ $# -gt 0 ] && CONF_DIR="$1" && shift ;;
         --tag)      [ $# -gt 0 ] && TAG="$1"      && shift ;;
-        --out-dir)  [ $# -gt 0 ] && OUT_DIR="$1"  && shift ;;
+        --run-dir)  [ $# -gt 0 ] && RUN_DIR="$1"  && shift ;;
         --memory)   [ $# -gt 0 ] && MEMORY="$1"   && shift ;;
         --queue)    [ $# -gt 0 ] && QUEUE="$1"   && shift ;;
         --submit)                   SUBMIT=1               ;;
@@ -98,10 +98,10 @@ if [ "$CONF_DIR" == "NONE" ]; then
     echo "Missing --conf <DIR>"
     exit -1
 fi
-if [ "$OUT_DIR" == "NONE" ]; then
-    OUT_DIR=$SCRIPT_DIR/output/${TAG}_$(date +"%Y%m%dT%H%MZ")
-    echo "INFO: Using output directory '$OUT_DIR'"
-    if [ -d $OUT_DIR ]; then
+if [ "$RUN_DIR" == "NONE" ]; then
+    RUN_DIR=$SCRIPT_DIR/output/${TAG}_$(date +"%Y%m%dT%H%MZ")
+    echo "INFO: Using output directory '$RUN_DIR'"
+    if [ -d $RUN_DIR ]; then
         echo "ERROR: Output directory exists!"
         echo "ERROR: Aborting"
         exit -1
@@ -113,16 +113,17 @@ fi
 
 #Remove trailing slash from conf dir / out dir
 CONF_DIR=${CONF_DIR%%/}
-OUT_DIR=${OUT_DIR%%/}
+RUN_DIR=${RUN_DIR%%/}
 
 
 
 
 
 
-echo "INFO: Creating output directory '$OUT_DIR' and copying config files"
-mkdir -p $OUT_DIR
+echo "INFO: Creating output directory '$RUN_DIR' and copying config files"
+mkdir -p $RUN_DIR
 for FILENAME in "plume_heights.csv"    \
+                "a_priori.dat"         \
                 "conf_a_priori.ini"    \
                 "conf_match_files.ini" \
                 "conf_inversion.ini"   \
@@ -130,13 +131,18 @@ for FILENAME in "plume_heights.csv"    \
                 "ash_simulations.csv"  \
                 ; do
     SRC_FILE="$CONF_DIR/$FILENAME"
-    DST_FILE="$OUT_DIR/${FILENAME%.*}_${TAG}.${FILENAME##*.}"
+    DST_FILE="$RUN_DIR/${FILENAME%.*}_${TAG}.${FILENAME##*.}"
     echo "INFO: Copying '$SRC_FILE'"
     if [ ! -e "$SRC_FILE" ]; then
-        echo "ERROR: Could not find $SRC_FILE"
-        exit -1
+        echo "WARNING: Could not find $SRC_FILE"
     else
         cp -L "$SRC_FILE" "$DST_FILE";
+
+        # Substitute all @VAR@ with proper contents of $VAR
+        for SUBSTITUTION_VAR in $(cat $DST_FILE | grep -oP "@.*?@" | tr -d '@' | sort | uniq ); do
+            echo "INFO: Subsitituting $SUBSTITUTION_VAR => ${!SUBSTITUTION_VAR}"
+            sed -i'' "s#@${SUBSTITUTION_VAR}@#${!SUBSTITUTION_VAR}#g" "$DST_FILE"
+        done
     fi
 done
 
@@ -147,7 +153,7 @@ done
 echo "INFO: Setting up job script"
 # This reads the job script template, and replaces all
 # @VAR@ with contents of $VAR
-JOB_SCRIPT="$OUT_DIR/job_script_${TAG}.sh"
+JOB_SCRIPT="$RUN_DIR/job_script_${TAG}.sh"
 cp -L "$SCRIPT_DIR/inversion_job_environment.sh" $JOB_SCRIPT
 chmod +x "$JOB_SCRIPT"
 for SUBSTITUTION_VAR in $(cat $JOB_SCRIPT | grep -oP "@.*?@" | tr -d '@' | sort | uniq ); do
@@ -161,7 +167,7 @@ done
 echo " "
 echo "################ SUMMARY #################"
 echo " "
-echo "Job has been set up in $OUT_DIR"
+echo "Job has been set up in $RUN_DIR"
 if [ $SUBMIT == 1 ]; then
     echo "Submitting job!"
     qsub "$JOB_SCRIPT"
