@@ -30,6 +30,7 @@ if __name__ == "__main__":
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.colors import LinearSegmentedColormap, LogNorm
+import scipy.sparse
 import numpy as np
 import datetime
 import json
@@ -317,9 +318,18 @@ def plotAshInvMatrix(matrix, fig=None, downsample=True):
         out = None
         try:
             target_size = [s // t for s, t in zip(arr.shape, downsample_factor)]
-            out = rebin(arr, target_size)
-        except MemoryError as e:
-            out = arr[::downsample_factor[0], ::downsample_factor[1]]
+            if (scipy.sparse.issparse(arr)):
+                out = rebin(arr.toarray(), target_size)
+            else:
+                out = rebin(arr, target_size)
+        except Exception as e:
+            try:
+                out = arr[::downsample_factor[0], ::downsample_factor[1]]
+
+                if (scipy.sparse.issparse(out)):
+                    out = out.toarray()
+            except MemoryError as e:
+                pass
 
         return out
 
@@ -333,6 +343,7 @@ def plotAshInvMatrix(matrix, fig=None, downsample=True):
     vmin = max(matrix.min(), 1e-10)
     vmax = max(matrix.max(), 2e-10)
     extent = [0, matrix.shape[1], matrix.shape[0], 0]
+
     m = matrix
     if (downsample):
         m = downsample(matrix, fig_size)

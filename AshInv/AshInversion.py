@@ -95,7 +95,8 @@ class AshInversion():
         if hasattr(self, 'M'):
             to_keep = np.ones((self.M.shape[1]), dtype=np.bool)
             to_keep[to_delete] = False
-            self.M = Misc.delete_in_place(self.M, to_keep_cols=to_keep)
+            to_keep = np.flatnonzero(to_keep)
+            self.M = self.M[:,to_keep]
         self.x_a = np.delete(self.x_a, to_delete)
         self.sigma_x = np.delete(self.sigma_x, to_delete)
 
@@ -219,7 +220,7 @@ class AshInversion():
         assert num_emissions == (self.ordering_index.max()+1), "Ordering index has wrong entries!"
         self.logger.info("Memory available pre alloc: {:.1f} MB".format(psutil.virtual_memory().available/(1024*1024)))
         self.logger.info("Will try to allocate {:d}x{:d} matrix ({:.1f} MB)".format(total_num_obs, num_emissions, total_num_obs*num_emissions*8/(1024*1024)))
-        self.M = np.zeros((total_num_obs, num_emissions), dtype=np.float64)
+        self.M = sparse.dok_matrix((total_num_obs, num_emissions), dtype=np.float64)
         self.y_0 = np.empty((total_num_obs), dtype=np.float64)
         self.sigma_o = np.empty((total_num_obs), dtype=np.float64)
         self.logger.info("Memory post alloc: {:.1f} MB".format(psutil.virtual_memory().available/(1024*1024)))
@@ -379,9 +380,12 @@ class AshInversion():
         self.logger.info("Reshaping M from {:d} to {:d} rows".format(self.M.shape[0], obs_counter))
         rows_to_keep = np.zeros(self.M.shape[0], dtype=np.bool)
         rows_to_keep[:obs_counter] = True
-        self.M = Misc.delete_in_place(self.M, rows_to_keep)
+        self.M = self.M[rows_to_keep,:]
         self.y_0 = self.y_0[:obs_counter]
         self.sigma_o = self.sigma_o[:obs_counter]
+
+        #Convert M to csr_matrix
+        self.M = self.M.tocsr()
 
         self.logger.debug("System matrix created.")
 
@@ -427,6 +431,10 @@ class AshInversion():
             self.level_heights = data['level_heights']
             self.volcano_altitude = data['volcano_altitude']
             self.emission_times = data['emission_times']
+
+        #Support older npz-files
+        if (not scipy.sparse.issparse(self.M)):
+            self.M = scipy.sparse.csr_matrix(self.M)
 
         self.logger.info("System matrix size: {:s}".format(str(self.M.shape)))
         self.logger.info("Ordering index size: {:s}".format(str(np.count_nonzero(self.ordering_index >= 0))))
@@ -494,11 +502,11 @@ class AshInversion():
         #If all simulations (columns) for a single observation (row) have zero emission,
         #they all match equally well/poorly
         if (rowsum_threshold is not None):
-            nonzero_rows = np.sum(self.M, axis=1) > rowsum_threshold
-            n_remove = nonzero_rows.size - np.count_nonzero(nonzero_rows)
+            nonzero_rows = np.flatnonzero(np.sum(self.M, axis=1) > rowsum_threshold)
+            n_remove = self.M.shape[0] - nonzero_rows.size
             self.logger.info("Removing {:d} all zero rows from M".format(n_remove))
             if (n_remove > 0):
-                self.M = Misc.delete_in_place(self.M, to_keep_rows=nonzero_rows)
+                self.M = self.M[nonzero_rows, :]
                 self.y_0 = self.y_0[nonzero_rows]
                 self.sigma_o = self.sigma_o[nonzero_rows]
 
@@ -566,12 +574,9 @@ class AshInversion():
         D[-1, -1] = -1
         DTD = np.matmul(D.transpose(), D)
 
-        #Create sparse matrix M
-        spM = scipy.sparse.csr_matrix(self.M)
-
         #Create right hand side
         #Y = y_0 - M x_a
-        Y = self.y_0 - np.matmul(self.M, self.x_a)
+        Y = self.y_0 - self.M @ self.x_a
 
         #These solvers do not change a priori uncertainty - no use in using multiple iterations
         if (solver=='nnls' or solver == 'lstsq' or a_priori_epsilon == 0.0):
@@ -595,29 +600,15 @@ class AshInversion():
                 sigma_x_m2 = np.zeros_like(self.sigma_x)
 
             #Create the system matrix G
-            #Compute M^T\diag(sigma_o^-2)
-            """
-            MT_sigma_o = self.M.transpose().copy()
-            for k in range(MT_sigma_o.shape[1]):
-                MT_sigma_o[:,k] *= sigma_o_m2[k]
-            """
             #   G = M^T diag(\sigma_o^-2) M + diag(\sigma_x^-2) + \eps D^T D
-            """
-            G = np.matmul(MT_sigma_o, self.M) \
+            G = (self.M.transpose() @ sigma_o_m2 @ self.M).toarray() \
                 + np.diag(sigma_x_m2) \
                 + smoothing_epsilon * np.mean(sigma_x_m2) * DTD
-            """
-            G = (spM.transpose() * sigma_o_m2 * spM).toarray() \
-                + np.diag(sigma_x_m2) \
-                + smoothing_epsilon * np.mean(sigma_x_m2) * DTD
-            #G = np.matmul(MT_sigma_o, self.M) \
-            #    + np.diag(sigma_x_m2) \
-            #    + smoothing_epsilon * np.mean(sigma_x_m2) * DTD
             self.logger.debug("G condition number: {:f}".format(np.linalg.cond(G)))
 
             #Right hand side
             #B = sigma_o^-2 M^T Y
-            B = spM.transpose() * sigma_o_m2 * Y
+            B = self.M.transpose() * sigma_o_m2 * Y
 
             #Solve GX=B
             self.logger.debug("Using solver {:s}".format(solver))
@@ -646,7 +637,7 @@ class AshInversion():
 
             elif (solver=='lstsq'):
                 #Use least squares to solve original M x = y_0 system (no a priori)
-                self.x, res, rank, sing = np.linalg.lstsq(self.M, self.y_0)
+                self.x, res, rank, sing = np.linalg.lstsq(self.M.toarray(), self.y_0)
                 self.logger.debug("Residuals: {:s}".format(str(res)))
                 self.logger.debug("Singular values: {:s}".format(str(sing)))
                 self.logger.debug("Rank: {:d}".format(rank))
@@ -661,7 +652,7 @@ class AshInversion():
 
             elif (solver=='nnls'):
                 #Uses non zero optimization to solve Mx=y (no a priori)
-                self.x, rnorm = scipy.optimize.nnls(self.M, self.y_0)
+                self.x, rnorm = scipy.optimize.nnls(self.M.toarray(), self.y_0)
                 self.logger.debug("Residual: {:f}".format(rnorm))
 
             elif (solver=='nnls2'):
@@ -672,7 +663,7 @@ class AshInversion():
 
             elif (solver=='lsq_linear'):
                 #Linear least squares for Mx=y with a priori bounds
-                res = scipy.optimize.lsq_linear(self.M, self.y_0, bounds=(self.x_a-self.sigma_x/a_priori_epsilon, self.x_a+self.sigma_x/a_priori_epsilon))
+                res = scipy.optimize.lsq_linear(self.M.toarray(), self.y_0, bounds=(self.x_a-self.sigma_x/a_priori_epsilon, self.x_a+self.sigma_x/a_priori_epsilon))
                 self.x = res.x
                 self.logger.debug("Residuals: {:s}".format(str(res.fun)))
                 self.logger.debug("Optimlity: {:f}".format(res.optimality))
@@ -688,68 +679,13 @@ class AshInversion():
                 self.logger.debug("Iterations: {:d}".format(res.nit))
                 self.logger.debug("Success: {:d}".format(res.success))
 
-            elif (solver == 'experimental'):
-                #Create the system matrix G
-                #Compute M^T\diag(sigma_o^-2)
-                MT_sigma_o = self.M.transpose().copy()
-                for k in range(MT_sigma_o.shape[1]):
-                    MT_sigma_o[:,k] *= sigma_o_m2[k]
-
-                misfit_epsilon = 1.0 - a_priori_epsilon
-                G = np.matmul(MT_sigma_o, self.M) \
-                    + a_priori_epsilon/misfit_epsilon * np.diag(sigma_x_m2) \
-                    + smoothing_epsilon/misfit_epsilon * np.mean(sigma_x_m2) * DTD
-                self.logger.debug("G condition number: {:f}".format(np.linalg.cond(G)))
-
-                #Create right hand side
-                #B = sigma_o^-2 M^T y_o + sigma_x^-2 x_a
-                B = np.matmul(MT_sigma_o, self.y_0) + sigma_x_m2*self.x_a
-
-                #Solve
-                self.x = np.linalg.solve(G, B)
-                res = np.linalg.norm(np.dot(G, self.x)-B)
-                self.logger.debug("Residual: {:f}".format(res))
-
-            elif (solver == 'experimental2'):
-                #Compute N = M x_a
-                N = self.M.copy()
-                assert(N.shape[1] == self.x_a.size)
-                xx = self.x_a.copy()
-                m = xx.min()
-                r = xx.max()-m
-                xx = (xx - m) / r
-                for k in range(self.x_a.size):
-                    N[:,k] *= xx[k]
-
-                #Compute N^T\diag(sigma_o^-2)
-                NT_sigma_o = N.transpose().copy()
-                for k in range(sigma_o_m2.size):
-                    NT_sigma_o[:,k] *= sigma_o_m2[k]
-
-                #   G = N^T diag(\sigma_o^-2) N + diag(1/4) + \eps D^T D
-                s = np.ones_like(xx)
-                s = sigma_x_m2 * np.power(xx, 2)
-                G = misfit_epsilon * np.matmul(NT_sigma_o, N) + a_priori_epsilon * np.diag(s)  + smoothing_epsilon * DTD
-                self.logger.debug("G condition number: {:f}".format(np.linalg.cond(G)))
-
-                #Create right hand side
-                #B = sigma_o^-2 N^T y_0
-                B = np.matmul(NT_sigma_o, self.y_0)
-
-                #Solve
-                self.x = np.linalg.solve(G, B)
-                res = np.linalg.norm(np.dot(G, self.x)-B)
-                self.logger.debug("Residual: {:f}".format(res))
-                self.x = -(self.x * r + m)
             else:
                 raise RuntimeError("Invalid solver '{:s}'".format(solver))
 
             #Write out statistics
-            res = np.linalg.norm(np.matmul(self.M, self.x) - self.y_0)
+            res = np.linalg.norm(self.M @ self.x - self.y_0)
             self.residual += [res]
             self.logger.info("Residual |M x - y_o| = {:f}".format(res))
-            self.logger.debug("|M|={:f}, |G|={:f}".format(np.linalg.norm(self.M), np.linalg.norm(G)))
-            self.logger.debug("|x|={:f}, |Y|={:f}, |B|={:f}".format(np.linalg.norm(self.x), np.linalg.norm(Y), np.linalg.norm(B)))
 
             #Create plots and save result
             if (output_fig_file is not None):
