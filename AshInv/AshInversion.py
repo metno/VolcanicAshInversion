@@ -40,6 +40,10 @@ import scipy.optimize
 import gc
 import psutil
 
+#Enable this to profile memory
+#from memory_profiler import profile
+
+
 from matplotlib import pyplot as plt
 import matplotlib.colors
 
@@ -60,6 +64,7 @@ class AshInversion():
 
 
 
+    #@profile
     def make_ordering_index(self, mask=None):
         """
         Create linear ordering of matrix elements.
@@ -104,6 +109,7 @@ class AshInversion():
 
 
 
+    #@profile
     def make_a_priori(self, filename):
         """
         Create left hand side vector of emissions and emission uncertainties
@@ -154,9 +160,13 @@ class AshInversion():
                     self.sigma_x[emission_index] = a_priori_2d_uncertainty[t, a]
 
 
+    #@profile
+    def get_memory_usage_gb(self):
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / (1024*1024*1024)
 
 
-
+    #@profile
     def make_system_matrix(self,
                            matched_file_csv_filename,
                            use_elevations=False,
@@ -206,7 +216,7 @@ class AshInversion():
         remove = np.ones((self.level_heights.size, self.emission_times.size), dtype=np.bool)
         for t, emission_time in enumerate(self.emission_times):
             min_days=0
-            max_days=6,
+            max_days=6
             deltas = (matched_times - emission_time) / np.timedelta64(1, 'D')
             valid = (deltas >= min_days) & (deltas < max_days)
             if np.any(valid):
@@ -217,24 +227,34 @@ class AshInversion():
         #Allocate data
         gc.collect()
         num_emissions = np.count_nonzero(self.ordering_index >= 0)
+        timesteps_per_day = 24 / (np.diff(self.emission_times).max()/np.timedelta64(1, 'h'))
+        nnz = int(total_num_obs*self.level_heights.size*max_days*timesteps_per_day)
         assert num_emissions == (self.ordering_index.max()+1), "Ordering index has wrong entries!"
-        self.logger.info("Memory available pre alloc: {:.1f} MB".format(psutil.virtual_memory().available/(1024*1024)))
-        self.logger.info("Will try to allocate {:d}x{:d} matrix ({:.1f} MB)".format(total_num_obs, num_emissions, total_num_obs*num_emissions*8/(1024*1024)))
-        self.M = sparse.dok_matrix((total_num_obs, num_emissions), dtype=np.float64)
+        self.logger.info("Memory used pre alloc: {:.1f} GB".format(self.get_memory_usage_gb()))
+        self.logger.info("Will try to allocate {:d}x{:d} matrix with {:d} non-zeros ({:.1f} GB)".format(
+                total_num_obs,
+                num_emissions,
+                nnz,
+                nnz*(8+4)/(1024*1024*1024)))
+        M_data = np.empty(nnz, dtype=np.float64)
+        M_indices = np.empty(nnz, dtype=np.int32)
+        M_indptr = np.empty(total_num_obs, dtype=np.int32)
         self.y_0 = np.empty((total_num_obs), dtype=np.float64)
         self.sigma_o = np.empty((total_num_obs), dtype=np.float64)
-        self.logger.info("Memory post alloc: {:.1f} MB".format(psutil.virtual_memory().available/(1024*1024)))
+        self.logger.info("Memory used post alloc: {:.1f} GB".format(self.get_memory_usage_gb()))
 
         #RHS vectors of observations (b) and uncertainties (b_sigma)
         obs_counter = 0
+        nnz_counter = 0
+        M_indptr[0] = 0
 
         #Loop over all observations and assemble row by row into matrix
         n_removed = 0
         start_assembly = time.time()
         for row in matched_files_df.itertuples():
+            timers = { 'start': {}, 'end': {} }
+            timers['start']['tot'] = time.time()
             gc.collect()
-
-            self.logger.debug("Processing {:s}\nCPU: {:.1f} %, Memory: {:.1f} %".format(row.matched_file, psutil.cpu_percent(1), psutil.virtual_memory().percent))
 
             filename = row.matched_file
             filename = os.path.join(matched_file_dir, filename)
@@ -250,6 +270,10 @@ class AshInversion():
                     num_files,
                     percent_complete,
                     str(datetime.timedelta(seconds=eta))))
+                self.logger.info("Processing {:s}\nCPU: {:.1f} %, Memory: {:.1f} GB".format(
+                    row.matched_file,
+                    psutil.cpu_percent(1),
+                    self.get_memory_usage_gb()))
 
             if(row.num_observations == 0):
                 continue
@@ -277,7 +301,7 @@ class AshInversion():
 
                 #Get observations that are unmasked
                 obs = nc_file['obs'][:,:]
-                mask = ~obs.mask
+                mask = np.nonzero(~obs.mask)
                 obs = obs[mask]
                 n_obs = len(obs)
 
@@ -288,11 +312,11 @@ class AshInversion():
                     obs_alt = nc_file['obs_alt'][:,:]*1000 #FIXME: Given in KM
                     obs_alt = obs_alt[mask]
 
-                #Read timestep by timestep in case of many timesteps (out of memory)
-                sim = np.empty((len(times), row.num_altitudes, n_obs))
-                for t in range(len(times)):
-                    s = nc_file['sim'][t,:,:,:]
-                    sim[t,:,:] = s[:,mask]
+                #Read simulation data from disk
+                timers['start']['dsk'] = time.time()
+                s = nc_file['sim'][:,:,:,:]
+                sim = s[:, :, mask[0], mask[1]].reshape((len(times), row.num_altitudes, n_obs))
+                timers['end']['dsk'] = time.time()
 
                 #Check sizes
                 assert (n_obs == row.num_observations), "Number of unmasked observations {:d} does not match up with expected {:d}".format(n_obs, row.num_observations)
@@ -331,9 +355,10 @@ class AshInversion():
                         sim = sim[:,:,keep]
                         n_obs -= n_remove_zero
                         n_removed += n_remove_zero
-                self.logger.info("File {:d}/{:d}: Added {:d}/{:d} observations (removed {:d} uncertain, and {:d}/{:d} zeroes)".format(
+                self.logger.info("File {:d}/{:d} ({:.0f} %): Added {:d}/{:d} observations (removed {:d} uncertain, and {:d}/{:d} zeroes)".format(
                     (row.Index+1),
                     num_files,
+                    (100*(obs_counter+n_removed+1)) / total_num_obs,
                     n_obs,
                     row.num_observations,
                     n_remove_af,
@@ -341,14 +366,23 @@ class AshInversion():
                     n_total_zero))
 
                 #  Assemble system matrix
+                timers['start']['asm'] = time.time()
                 for o in range(n_obs):
-                    for a in range(row.num_altitudes):
-                        for t in range(row.num_timesteps):
+                    #Set up fo rusing ash cloud top observatoins
+                    altitude_max = row.num_altitudes
+                    if (use_elevations):
+                        altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o])+1)
+
+                    for t in range(row.num_timesteps):
+                        for a in range(altitude_max):
                             if time_index[t] >= 0:
                                 val = sim[t, a, o]
                                 emission_index = self.ordering_index[a, time_index[t]]
                                 if emission_index >= 0 and not np.ma.is_masked(val):
-                                    self.M[obs_counter, emission_index] = val
+                                    M_indices[nnz_counter] = emission_index
+                                    M_data[nnz_counter] = val
+                                    nnz_counter = nnz_counter + 1
+                    M_indptr[obs_counter+1] = nnz_counter
 
                     #FIXME Birthe uses constant standard deviation here.
                     self.y_0[obs_counter] = obs[o]
@@ -358,38 +392,48 @@ class AshInversion():
                     #This part implements top of ash cloud observation into the system
                     #by adding a zero-observation for the altitudes above the ash cloud
                     if (use_elevations):
-                        # Find index of top of ash cloud observation
-                        altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o])+1)
-
-                        # Move simulation values
-                        for a in range(altitude_max, row.num_altitudes):
-                            for t in range(row.num_timesteps):
+                        for t in range(row.num_timesteps):
+                            for a in range(altitude_max, row.num_altitudes):
                                 if time_index[t] >= 0:
+                                    val = sim[t, a, o]
                                     emission_index = self.ordering_index[a, time_index[t]]
-                                    if (emission_index >= 0):
-                                        self.M[obs_counter, emission_index] = self.M[obs_counter-1, emission_index]
-                                        self.M[obs_counter-1, emission_index] = 0
+                                    if emission_index >= 0 and not np.ma.is_masked(val):
+                                        M_indices[nnz_counter] = emission_index
+                                        M_data[nnz_counter] = val
+                                        nnz_counter = nnz_counter + 1
+                        M_indptr[obs_counter+1] = nnz_counter
 
                         #FIXME What should the standard deviation be here?
                         self.y_0[obs_counter] = 0.0 #Zero oserved ash here
                         self.sigma_o[obs_counter] = 0.0
                         obs_counter = obs_counter+1
 
+                timers['end']['asm'] = time.time()
+            timers['end']['tot'] = time.time()
+
+            logstr = []
+            logstr += ["nnz={:d}/{:d}".format(
+                    nnz_counter,
+                    M_data.size)]
+            logstr += ["#obs/s={:.1f}".format(n_obs/(timers['end']['tot'] - timers['start']['tot']))]
+            logstr += ["mem={:.1f} GB".format(self.get_memory_usage_gb())]
+            for key in timers['start'].keys():
+                logstr += ["{:s}={:.1f} s".format(key, timers['end'][key] - timers['start'][key])]
+            self.logger.info(", ".join(logstr))
 
         #Finally resize matrix to match actually used observations
-        self.logger.info("Reshaping M from {:d} to {:d} rows".format(self.M.shape[0], obs_counter))
-        rows_to_keep = np.zeros(self.M.shape[0], dtype=np.bool)
-        rows_to_keep[:obs_counter] = True
-        self.M = self.M[rows_to_keep,:]
+        self.logger.info("Reshaping M from {:d} to {:d} rows with {:d} nonzeros".format(total_num_obs, obs_counter, nnz_counter))
+        M_indices.resize(nnz_counter)
+        M_data.resize(nnz_counter)
+        M_indptr.resize(obs_counter+1)
+        self.M = scipy.sparse.csr_matrix((M_data, M_indices, M_indptr), shape=(obs_counter, num_emissions))
         self.y_0 = self.y_0[:obs_counter]
         self.sigma_o = self.sigma_o[:obs_counter]
-
-        #Convert M to csr_matrix
-        self.M = self.M.tocsr()
 
         self.logger.debug("System matrix created.")
 
 
+    #@profile
     def save_matrices(self, outname):
         """
         Save matrices to file.
@@ -408,6 +452,7 @@ class AshInversion():
                      emission_times=self.emission_times)
 
 
+    #@profile
     def plotAshInvMatrix(self, fig=None, matrix=None, downsample=True):
         if (matrix is None):
             return Plot.plotAshInvMatrix(self.M, fig, downsample)
@@ -416,12 +461,15 @@ class AshInversion():
 
 
 
+    #@profile
     def load_matrices(self, inname):
         """
         Load matrices from file
         """
         self.logger.info("Initializing from existing matrices")
-        with np.load(inname, mmap_mode='r') as data:
+        gc.collect()
+        self.logger.info("Memory used pre load: {:.1f} MB".format(psutil.virtual_memory().used/(1024*1024)))
+        with np.load(inname, mmap_mode='r', allow_pickle=True) as data:
             self.M = data['M']
             self.y_0 = data['y_0']
             self.x_a = data['x_a']
@@ -432,16 +480,13 @@ class AshInversion():
             self.volcano_altitude = data['volcano_altitude']
             self.emission_times = data['emission_times']
 
-        #Support older npz-files
-        if (not scipy.sparse.issparse(self.M)):
-            self.M = scipy.sparse.csr_matrix(self.M)
-
         self.logger.info("System matrix size: {:s}".format(str(self.M.shape)))
         self.logger.info("Ordering index size: {:s}".format(str(np.count_nonzero(self.ordering_index >= 0))))
 
 
 
 
+    #@profile
     def scale_system(self, scale_emission=1.0e-9,
                             scale_observation=1.0e-3,
                             scale_a_priori=1.0e0,
@@ -487,6 +532,7 @@ class AshInversion():
 
 
 
+    #@profile
     def prune_system(self,
                      rowsum_threshold=None,
                      colsum_threshold=None,
@@ -538,6 +584,7 @@ class AshInversion():
 
 
 
+    #@profile
     def iterative_inversion(self, solver='direct',
                             max_iter=100,
                             max_negative=1.0e-4,
@@ -614,8 +661,6 @@ class AshInversion():
             self.logger.debug("Using solver {:s}".format(solver))
             if (solver=='direct'):
                 #Uses a direct solver
-                print(B.shape)
-                print(G.shape)
                 self.x = np.linalg.solve(G, B)
                 res = np.linalg.norm(np.dot(G, self.x)-B)
                 self.logger.debug("Residual: {:f}".format(res))
@@ -818,10 +863,18 @@ if __name__ == '__main__':
         'config': json.dumps(cfg)
     }
 
+
     if (args.verbose):
-        logging.basicConfig(level=logging.DEBUG)
+        logging.basicConfig(format='%(asctime)s %(name)-12s %(levelname)-8s: %(message)s',
+                        datefmt="%Y%m%dT%H%M%SZ",
+                        stream=sys.stderr,
+                        level=logging.DEBUG)
     else:
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(format='%(asctime)s %(name)-12s %(levelname)-8s: %(message)s',
+                        datefmt="%Y%m%dT%H%M%SZ",
+                        stream=sys.stderr,
+                        level=logging.INFO)
+
 
     #Set output directory
     outdir = os.path.abspath(args.output_dir)
