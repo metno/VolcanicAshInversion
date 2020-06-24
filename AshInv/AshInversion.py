@@ -35,6 +35,7 @@ import os
 import re
 import json
 import scipy.sparse
+import scipy.sparse.linalg
 import scipy.linalg
 import scipy.optimize
 import gc
@@ -195,7 +196,7 @@ class AshInversion():
         total_num_obs = matched_files_df["num_observations"].sum()
         total_num_emis = matched_files_df["num_emissions"].sum()
         num_files = matched_files_df.shape[0]
-        self.logger.debug("{:d} observations, {:d} emissions in {:d} files".format(total_num_obs, total_num_emis, num_files))
+        self.logger.info("Processing {:d} observations and {:d} emissions in {:d} files".format(total_num_obs, total_num_emis, num_files))
 
         #Check if we have observed altitudes
         #Then we double the number of observations: ash up to altitude, no ash above
@@ -228,19 +229,26 @@ class AshInversion():
         gc.collect()
         num_emissions = np.count_nonzero(self.ordering_index >= 0)
         timesteps_per_day = 24 / (np.diff(self.emission_times).max()/np.timedelta64(1, 'h'))
-        nnz = int(total_num_obs*self.level_heights.size*max_days*timesteps_per_day)
         assert num_emissions == (self.ordering_index.max()+1), "Ordering index has wrong entries!"
         self.logger.info("Memory used pre alloc: {:.1f} GB".format(self.get_memory_usage_gb()))
-        self.logger.info("Will try to allocate {:d}x{:d} matrix with {:d} non-zeros ({:.1f} GB)".format(
+        self.logger.info("Will try to allocate {:d}x{:d} matrix with {:d} non-zeros (~{:.1f} GB)".format(
                 total_num_obs,
                 num_emissions,
-                nnz,
-                nnz*(8+4)/(1024*1024*1024)))
-        M_data = np.empty(nnz, dtype=np.float64)
-        M_indices = np.empty(nnz, dtype=np.int32)
+                total_num_emis,
+                total_num_emis*(8+4)/(1024*1024*1024)))
+
+        #This forces allocation and initialization of data
+        #Really important for speed. Without this, numpy appears to
+        #reallocate and move all the data around
+        M_data = np.empty(total_num_emis, dtype=np.float64)
+        M_indices = np.empty(total_num_emis, dtype=np.int32)
         M_indptr = np.empty(total_num_obs, dtype=np.int32)
-        self.y_0 = np.empty((total_num_obs), dtype=np.float64)
-        self.sigma_o = np.empty((total_num_obs), dtype=np.float64)
+        M_data.fill(0.0)
+        M_indices.fill(0)
+        M_indptr.fill(0)
+
+        self.y_0 = np.zeros((total_num_obs), dtype=np.float64)
+        self.sigma_o = np.zeros((total_num_obs), dtype=np.float64)
         self.logger.info("Memory used post alloc: {:.1f} GB".format(self.get_memory_usage_gb()))
 
         #RHS vectors of observations (b) and uncertainties (b_sigma)
@@ -441,7 +449,10 @@ class AshInversion():
         self.logger.info("Writing matrices to {:s}".format(outname))
         self.logger.info("System size {:s}".format(str(self.M.shape)))
         np.savez_compressed(outname,
-                     M=self.M,
+                     M_data=self.M.data,
+                     M_indices=self.M.indices,
+                     M_indptr=self.M.indptr,
+                     M_shape=self.M.shape,
                      y_0=self.y_0,
                      x_a=self.x_a,
                      sigma_o=self.sigma_o,
@@ -468,9 +479,9 @@ class AshInversion():
         """
         self.logger.info("Initializing from existing matrices")
         gc.collect()
-        self.logger.info("Memory used pre load: {:.1f} MB".format(psutil.virtual_memory().used/(1024*1024)))
-        with np.load(inname, mmap_mode='r', allow_pickle=True) as data:
-            self.M = data['M']
+        self.logger.info("Memory used pre load: {:.1f} GB".format(self.get_memory_usage_gb()))
+        with np.load(inname, mmap_mode='r') as data:
+            self.M = scipy.sparse.csr_matrix((data['M_data'], data['M_indices'], data['M_indptr']), shape=data['M_shape'])
             self.y_0 = data['y_0']
             self.x_a = data['x_a']
             self.sigma_o = data['sigma_o']
@@ -479,6 +490,7 @@ class AshInversion():
             self.level_heights = data['level_heights']
             self.volcano_altitude = data['volcano_altitude']
             self.emission_times = data['emission_times']
+        self.logger.info("Memory used post load: {:.1f} GB".format(self.get_memory_usage_gb()))
 
         self.logger.info("System matrix size: {:s}".format(str(self.M.shape)))
         self.logger.info("Ordering index size: {:s}".format(str(np.count_nonzero(self.ordering_index >= 0))))
@@ -606,12 +618,13 @@ class AshInversion():
         returns x - a posteriori emissions
         """
         #3: Perform inversion based on description in Steensen PhD p30-32 (with corrections)
-        self.logger.debug("Starting iterative inversion")
+        self.logger.info("Starting iterative inversion")
         n_obs, n_emis = self.M.shape
 
         assert n_obs == self.y_0.size, "y_0 has the wrong shape (should be number of observations, {:d}, but got {:d})".format(n_obs, self.y_0.size)
         assert n_emis == self.x_a.size, "x_a has the wrong shape (should be number of emissions, {:d}, but got {:d})".format(n_emis, self.x_a.size)
 
+        start_precompute = time.time()
         #Create second derivative matrix D
         D = np.zeros((n_emis, n_emis))
         np.fill_diagonal(D[1:], 1)
@@ -621,9 +634,22 @@ class AshInversion():
         D[-1, -1] = -1
         DTD = np.matmul(D.transpose(), D)
 
+        #Create diagonal matrix for sigma_o^-2
+        sigma_o_m2 = scipy.sparse.dia_matrix((np.power(self.sigma_o, -1), 0), shape=(n_obs, n_obs)).tocsr()
+
         #Create right hand side
         #Y = y_0 - M x_a
-        Y = self.y_0 - self.M @ self.x_a
+        #B = sigma_o^-2 M^T Y
+        if not hasattr(self, 'B'):
+            Y = self.y_0 - self.M.dot(self.x_a)
+            self.B = self.M.transpose().dot(sigma_o_m2.dot(Y))
+
+        #Compute M^T diag(\sigma_o^-2) M
+        if not hasattr(self, 'Q'):
+            self.Q = ((self.M.transpose().dot(sigma_o_m2)).dot(self.M)).toarray()
+
+        end_precompute = time.time()
+        self.logger.info("Precomputed matrices in {:.1f} s".format(end_precompute - start_precompute))
 
         #These solvers do not change a priori uncertainty - no use in using multiple iterations
         if (solver=='nnls' or solver == 'lstsq' or a_priori_epsilon == 0.0):
@@ -633,50 +659,48 @@ class AshInversion():
         self.convergence = []
         self.residual = []
         for i in range(max_iter):
+            timings = { 'start': {}, 'end': {} }
+            timings['start']['tot'] = time.time()
+            timings['start']['G'] = time.time()
             self.logger.info("Iteration {:d}".format(i))
             self.logger.debug("|x_a|={:f}, |sigma_x|={:f}, |y_0|={:f}, |sigma_o|={:f}".format(np.linalg.norm(self.x_a), np.linalg.norm(self.sigma_x), np.linalg.norm(self.y_0), np.linalg.norm(self.sigma_o)))
 
-            #Create diagonal matrices for sigma_o^-2 and sigma_x^-2
-            """
-            sigma_o_m2 = np.power(self.sigma_o, -2)
-            """
-            sigma_o_m2 = scipy.sparse.dia_matrix((np.power(self.sigma_o, -1), 0), shape=(n_obs, n_obs))
+            #Create diagonal matrix for sigma_x^-2
             if (a_priori_epsilon > 0):
                 sigma_x_m2 = np.power(self.sigma_x / a_priori_epsilon, -2)
+                sigma_x_m2_mean = np.mean(sigma_x_m2)
             else:
                 sigma_x_m2 = np.zeros_like(self.sigma_x)
+                sigma_x_m2_mean = 1.0
 
             #Create the system matrix G
             #   G = M^T diag(\sigma_o^-2) M + diag(\sigma_x^-2) + \eps D^T D
-            G = (self.M.transpose() @ sigma_o_m2 @ self.M).toarray() \
-                + np.diag(sigma_x_m2) \
-                + smoothing_epsilon * np.mean(sigma_x_m2) * DTD
+            G = self.Q.copy() + np.diag(sigma_x_m2) + smoothing_epsilon * sigma_x_m2_mean * DTD
             self.logger.debug("G condition number: {:f}".format(np.linalg.cond(G)))
 
-            #Right hand side
-            #B = sigma_o^-2 M^T Y
-            B = self.M.transpose() * sigma_o_m2 * Y
+            timings['end']['G'] = time.time()
 
             #Solve GX=B
+            timings['start']['slv'] = time.time()
             self.logger.debug("Using solver {:s}".format(solver))
             if (solver=='direct'):
                 #Uses a direct solver
-                self.x = np.linalg.solve(G, B)
-                res = np.linalg.norm(np.dot(G, self.x)-B)
+                self.x = np.linalg.solve(G, self.B)
+                res = np.linalg.norm(np.dot(G, self.x)-self.B)
                 self.logger.debug("Residual: {:f}".format(res))
                 self.x = self.x+self.x_a
 
             elif (solver=='inverse'):
                 #Computes the inverse of G to solve Gx=B
-                self.x = np.matmul(np.linalg.inv(G), B)
-                res = np.linalg.norm(np.dot(G, self.x)-B)
+                self.x = np.matmul(np.linalg.inv(G), self.B)
+                res = np.linalg.norm(np.dot(G, self.x)-self.B)
                 self.logger.debug("Residual: {:f}".format(res))
                 self.x = self.x+self.x_a
 
             elif (solver=='pseudo_inverse'):
                 #Computes the pseudo inverse of G to solve Gx=B
-                self.x = np.matmul(scipy.linalg.pinv(G), B)
-                res = np.linalg.norm(np.dot(G, self.x)-B)
+                self.x = np.matmul(scipy.linalg.pinv(G), self.B)
+                res = np.linalg.norm(np.dot(G, self.x)-self.B)
                 self.logger.debug("Residual: {:f}".format(res))
                 self.x = self.x+self.x_a
 
@@ -689,7 +713,7 @@ class AshInversion():
 
             elif (solver=='lstsq2'):
                 #Uses least squares to solve the least squares system... Should be equal direct solve?
-                self.x, res, rank, sing = np.linalg.lstsq(G, B)
+                self.x, res, rank, sing = np.linalg.lstsq(G, self.B)
                 self.x = self.x+self.x_a
                 self.logger.debug("Residuals: {:s}".format(str(res)))
                 self.logger.debug("Singular values: {:s}".format(str(sing)))
@@ -702,7 +726,7 @@ class AshInversion():
 
             elif (solver=='nnls2'):
                 #Uses non zero optimization to solve Gx=B
-                self.x, rnorm = scipy.optimize.nnls(G, B)
+                self.x, rnorm = scipy.optimize.nnls(G, self.B)
                 self.x = self.x+self.x_a
                 self.logger.debug("Residual: {:f}".format(rnorm))
 
@@ -717,7 +741,7 @@ class AshInversion():
 
             elif (solver=='lsq_linear2'):
                 #Linear least squares for Gx=B
-                res = scipy.optimize.lsq_linear(G, B, bounds=(-self.sigma_x/a_priori_epsilon, +self.sigma_x/a_priori_epsilon))
+                res = scipy.optimize.lsq_linear(G, self.B, bounds=(-self.sigma_x/a_priori_epsilon, +self.sigma_x/a_priori_epsilon))
                 self.x = res.x+self.x_a
                 self.logger.debug("Residuals: {:s}".format(str(res.fun)))
                 self.logger.debug("Optimlity: {:f}".format(res.optimality))
@@ -726,9 +750,11 @@ class AshInversion():
 
             else:
                 raise RuntimeError("Invalid solver '{:s}'".format(solver))
+            timings['end']['slv'] = time.time()
+
 
             #Write out statistics
-            res = np.linalg.norm(self.M @ self.x - self.y_0)
+            res = np.linalg.norm(self.M.dot(self.x) - self.y_0)
             self.residual += [res]
             self.logger.info("Residual |M x - y_o| = {:f}".format(res))
 
@@ -747,7 +773,7 @@ class AshInversion():
                 outname = "{:s}{:03d}{:s}".format(path, i, ext)
                 self.logger.info("Saving matrix to {:s}".format(outname))
                 np.savez_compressed(outname,
-                             B=B,
+                             B=self.B,
                              G=G,
                              x_a=self.x_a,
                              sigma_x_m2=sigma_x_m2,
@@ -771,6 +797,13 @@ class AshInversion():
             sum_negative = self.x[neg_idx].sum()
             self.convergence += [-100*sum_negative/(sum_positive-sum_negative)]
             self.logger.info("Sum negative: {:f}, sum positive: {:f} ({:2.2f} %)".format(sum_negative, sum_positive, -100*sum_negative/(sum_positive-sum_negative)))
+
+            timings['end']['tot'] = time.time()
+            logstr = []
+            for key in timings['start'].keys():
+                logstr += ["{:s}={:.1f} s".format(key, timings['end'][key] - timings['start'][key])]
+            self.logger.info("Timings: " + ", ".join(logstr))
+
             if (-sum_negative < (sum_positive-sum_negative) * max_negative):
                 converged = True
                 break
@@ -837,9 +870,9 @@ if __name__ == '__main__':
     solver_args = parser.add_argument_group('Solver arguments')
     solver_args.add("--solver", type=str, default='direct',
                         help="Solver to use")
-    solver_args.add("--a_priori_epsilon", type=float, action="append", default=[0.5],
+    solver_args.add("--a_priori_epsilon", type=float, action="append", default=[],
                         help="How much to weight a priori info")
-    solver_args.add("--smoothing_epsilon", type=float, default=1.0e-3,
+    solver_args.add("--smoothing_epsilon", type=float, default=1.0e-1,
                         help="How smooth the solution should be")
     solver_args.add("--max_iter", type=int, default=20,
                         help="Maximum number of iterations to perform.")
@@ -865,13 +898,13 @@ if __name__ == '__main__':
 
 
     if (args.verbose):
-        logging.basicConfig(format='%(asctime)s %(name)-12s %(levelname)-8s: %(message)s',
-                        datefmt="%Y%m%dT%H%M%SZ",
+        logging.basicConfig(format='%(asctime)s %(levelname)s (%(name)s): %(message)s',
+                        datefmt="%Y-%m-%dT%H:%M:%SZ",
                         stream=sys.stderr,
                         level=logging.DEBUG)
     else:
-        logging.basicConfig(format='%(asctime)s %(name)-12s %(levelname)-8s: %(message)s',
-                        datefmt="%Y%m%dT%H%M%SZ",
+        logging.basicConfig(format='%(asctime)s %(levelname)s (%(name)s): %(message)s',
+                        datefmt="%Y-%m-%dT%H:%M:%SZ",
                         stream=sys.stderr,
                         level=logging.INFO)
 
@@ -938,27 +971,38 @@ if __name__ == '__main__':
     plt.close()
 
     #Run iterative inversion
-    print("Bisection to find optimal a priori epsilon")
-    interval = [0, 1]
-    for i in range(20):
-        eps = (interval[0] + interval[1]) / 2
+    n_iter = len(args.a_priori_epsilon)
+    use_bisection = False
+    if (n_iter == 0):
+        n_iter = 20
+        interval = [0, 1]
+        use_bisection = True
+        print("Bisection to find optimal a priori epsilon")
+
+    for i in range(n_iter):
+        if (use_bisection):
+            eps = (interval[0] + interval[1]) / 2
+        else:
+            eps = args.a_priori_epsilon[i]
         print("Inverting with a priori epsilon={:f}".format(eps))
         ash_inv.iterative_inversion(smoothing_epsilon=args.smoothing_epsilon,
                                 a_priori_epsilon=eps,
                                 max_iter=args.max_iter,
                                 solver=args.solver)
 
-        #Update interval
         valid = ash_inv.x_a > 0
         l_inf = np.max(np.abs((ash_inv.x[valid]-ash_inv.x_a[valid]) / ash_inv.x_a[valid]))
         print("Eps is {:f}, residual is{:f}, convergence is {:s}".format(eps, ash_inv.residual[-1], str(ash_inv.convergence)))
-        if (l_inf < 1):
-            #Maximum relative change less than 1
-            interval[1] = eps
-        else:
-            #Converges "too slowly"
-            interval[0] = eps
-        print("New interval: {:s}".format(str(interval)))
+
+        #Update interval
+        if (use_bisection):
+            if (l_inf < 1):
+                #Maximum relative change less than 1
+                interval[1] = eps
+            else:
+                #Converges "too slowly"
+                interval[0] = eps
+            print("New interval: {:s}".format(str(interval)))
 
         #Save inverted result as JSON file (similar to a priori)
         output_file = "{:s}_{:03d}_{:.8f}_a_posteriori.json".format(output_basename, i, eps)

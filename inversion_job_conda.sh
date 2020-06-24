@@ -22,6 +22,12 @@
 #                                                                            #
 ##############################################################################
 
+if [[ $_ == $0 ]]; then
+    echo "ERROR: Script is a subshell."
+    echo "INFO: Execute 'source ${BASH_SOURCE[0]}' instead"
+    exit -1
+fi
+
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 CONDA_EXE="$SCRIPT_DIR/miniconda3/bin/conda"
 CONDA_ENV_PATH="$SCRIPT_DIR/conda_ash_inv"

@@ -122,44 +122,22 @@ RUN_DIR=${RUN_DIR%%/}
 
 echo "INFO: Creating output directory '$RUN_DIR' and copying config files"
 mkdir -p $RUN_DIR
-for FILENAME in "plume_heights.csv"    \
-                "a_priori.dat"         \
-                "conf_a_priori.ini"    \
-                "conf_match_files.ini" \
-                "conf_inversion.ini"   \
-                "ash_observations.csv" \
-                "ash_simulations.csv"  \
-                ; do
-    SRC_FILE="$CONF_DIR/$FILENAME"
+for SRC_FILE in $CONF_DIR/*.* $SCRIPT_DIR/inversion_job_environment.sh; do
+    FILENAME=$(basename $SRC_FILE)
     DST_FILE="$RUN_DIR/${FILENAME%.*}_${TAG}.${FILENAME##*.}"
     echo "INFO: Copying '$SRC_FILE'"
-    if [ ! -e "$SRC_FILE" ]; then
-        echo "WARNING: Could not find $SRC_FILE"
-    else
-        cp -L "$SRC_FILE" "$DST_FILE";
+    cp -L "$SRC_FILE" "$DST_FILE";
 
-        # Substitute all @VAR@ with proper contents of $VAR
+    # Substitute all @VAR@ with proper contents of $VAR
+    # Check if text file
+    if ( grep -qI . $SRC_FILE ); then
         for SUBSTITUTION_VAR in $(cat $DST_FILE | grep -oP "@.*?@" | tr -d '@' | sort | uniq ); do
             echo "INFO: Subsitituting $SUBSTITUTION_VAR => ${!SUBSTITUTION_VAR}"
             sed -i'' "s#@${SUBSTITUTION_VAR}@#${!SUBSTITUTION_VAR}#g" "$DST_FILE"
         done
     fi
 done
-
-
-
-
-
-echo "INFO: Setting up job script"
-# This reads the job script template, and replaces all
-# @VAR@ with contents of $VAR
 JOB_SCRIPT="$RUN_DIR/job_script_${TAG}.sh"
-cp -L "$SCRIPT_DIR/inversion_job_environment.sh" $JOB_SCRIPT
-chmod +x "$JOB_SCRIPT"
-for SUBSTITUTION_VAR in $(cat $JOB_SCRIPT | grep -oP "@.*?@" | tr -d '@' | sort | uniq ); do
-    echo "INFO: Subsitituting $SUBSTITUTION_VAR => ${!SUBSTITUTION_VAR}"
-    sed -i'' "s#@${SUBSTITUTION_VAR}@#${!SUBSTITUTION_VAR}#g" "$JOB_SCRIPT"
-done
 
 
 
