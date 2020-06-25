@@ -67,6 +67,9 @@ class MatchFiles:
     def match_files(self, output_dir,
                     min_days=0, max_days=6,
                     mask_sim=True,
+                    obs_flag_max=1.95,
+                    zero_thinning=0.7,
+                    obs_zero=1.0e-20,
                     dummy_observation_json=None):
         """
         Loops through all observation files, and tries to match observation with simulations
@@ -77,6 +80,9 @@ class MatchFiles:
             Directory to place output NetCDF files.
         mask_sim : bool, optional
             Mask the unused simulation data in output (saves space). The default is True.
+        obs_flag_max - Remove observations with an as flag higher than this (0=no ash, 1=ash, 2=don't know)"
+        zero_thinning - Ratio of zero observations to keep
+        obs_zero - Observations smaller than this are treated as zero
 
         Returns
         -------
@@ -160,78 +166,70 @@ class MatchFiles:
             sim_lon = obs_lon
             sim_lat = obs_lat
 
+            #Get valid observations
+            mask = np.nonzero((obs_flag < 2))
+
             #Mask those elements we do not actually use
-            obs, obs_alt, obs_flag, sim = self.mask_output(obs, obs_alt, obs_flag, sim, mask_sim=mask_sim)
+            obs = obs[mask[0], mask[1]].filled()
+            if (obs_alt is not None):
+                obs_alt = obs_alt[mask[0], mask[1]]
+            obs_flag = obs_flag[mask[0], mask[1]]
+            #n_sim_files, n_levels, lat, lon
+            sim = sim[mask[0], mask[1], :, :]
+
+            #Generate (lon, lat) coordinte for each pixel
+            obs_lon, obs_lat = np.meshgrid(obs_lon, obs_lat)
+            obs_lon = obs_lon[mask[0], mask[1]]
+            obs_lat = obs_lat[mask[0], mask[1]]
+
+            #Remove observations with high ash flag (uncertain)
+            keep = (obs_flag < obs_flag_max)
+            n_remove_af = keep.size - np.count_nonzero(keep)
+            if (n_remove_af > 0):
+                obs = obs[keep]
+                obs_flag = obs_flag[keep]
+                if (obs_alt is not None):
+                    obs_alt = obs_alt[keep]
+                sim = sim[keep, :, :]
+                obs_lon = obs_lon[keep]
+                obs_lat = obs_lat[keep]
+
+            #Thinning observations of no ash observations:
+            n_remove_zero = 0
+            zeros = (obs <= obs_zero)
+            n_total_zero = np.count_nonzero(zeros)
+            if (zero_thinning < 1.0):
+                r = np.random.random(obs.shape)
+                remove = zeros & (r > zero_thinning)
+                n_remove_zero = np.count_nonzero(remove)
+                if (n_remove_zero > 0):
+                    keep = ~remove
+                    obs = obs[keep]
+                    obs_flag = obs_flag[keep]
+                    if (obs_alt is not None):
+                        obs_alt = obs_alt[keep]
+                    sim = sim[keep, :, :]
+                    obs_lon = obs_lon[keep]
+                    obs_lat = obs_lat[keep]
+            self.logger.info("Added {:d} observations (removed {:d} uncertain, and {:d}/{:d} zeroes)".format(
+                obs.size,
+                n_remove_af,
+                n_remove_zero,
+                n_total_zero))
 
             #Write to file
             self.write_matched_data(obs_lon, obs_lat, obs, obs_alt, obs_flag, obs_file.date, sim, sim_date, os.path.join(output_dir, out_filename))
 
             #Update statistics for this file
             self.obs_files.at[obs_file.Index, "matched_file"] = out_filename
-            self.obs_files.at[obs_file.Index, "num_observations"] = obs.count()
-            self.obs_files.at[obs_file.Index, "num_timesteps"] = sim.shape[0]
-            self.obs_files.at[obs_file.Index, "num_altitudes"] = sim.shape[1]
+            self.obs_files.at[obs_file.Index, "num_observations"] = obs.size
+            self.obs_files.at[obs_file.Index, "num_timesteps"] = sim.shape[1]
+            self.obs_files.at[obs_file.Index, "num_altitudes"] = sim.shape[2]
 
             #Update CSV-file
             self.obs_files.to_csv(matched_out_csv, index=False)
 
 
-
-    def mask_output(self, obs, obs_alt, obs_flag, sim, sim_eps_zero=1.0e-6, mask_sim=True):
-        """
-        Masks data that is not/should not be used in inversion
-
-
-        Parameters
-        ----------
-        obs : np.array
-            Observations.
-        obs_alt : np.array
-            Observation (max) altitude.
-        obs_flag : np.array
-            Observation flag.
-        sim : np.array
-            Simulation.
-        sim_eps_zero : float, optional
-            Simulation values less than this treated as zero. The default is 1.0e-6.
-        mask_sim : bool, optional
-            Mask the unused simulation data in output (saves space). The default is True.
-
-        Returns
-        -------
-        obs : np.array
-            masked observation.
-        obs_alt : np.array
-            masked observation (max) altitude.
-        obs_flag : np.array
-            masked observation flag.
-        sim : np.array
-            masked simulation.
-
-        """
-        self.logger.debug("Masking output data")
-        #Find maximum for each (x, y) location over time and level
-        #xmax_array(ix,jy) = max(xmax_array(ix,jy),model_sensitivities(ix,jy,k,l))
-        sim_max = np.amax(sim.filled(-np.inf), axis=(0, 1))
-
-        #if (xmax_array(ix,jy) .gt.1e-6  .and. obs_field(ix,jy) .gt. -999) then
-        #obs_flag == 0 => no ash
-        #obs_flag == 1 => ash
-        #obs_flag == 2 => don't know
-        #mask = ((sim_max > sim_eps_zero) & (~obs.mask)) | (obs_flag == 0)
-        #mask = ~mask
-        mask = obs.mask.copy()
-        if (self.verbose):
-            self.logger.debug("{:d} valid pixels".format(int(np.sum(~mask))))
-        obs = np.ma.masked_array(obs.filled(0.0), mask)
-        if (obs_alt is not None):
-            obs_alt = np.ma.masked_array(obs_alt.filled(0.0), mask)
-        obs_flag = np.ma.masked_array(obs_flag.filled(2.0), mask)
-
-        if (mask_sim):
-            sim = np.ma.masked_array(sim, np.tile(mask[np.newaxis,np.newaxis,:,:], (sim.shape[0], sim.shape[1], 1, 1)))
-
-        return obs, obs_alt, obs_flag, sim
 
 
     def match_size(self, obs_lon, obs_lat, obs, obs_alt, obs_flag, sim_lon, sim_lat, sim):
@@ -271,7 +269,7 @@ class MatchFiles:
             Simulation data.
 
         """
-        if (sim.shape[2:4] != obs.shape):
+        if (sim.shape[0:2] != obs.shape):
             self.logger.debug("Size of simulations ({:s}) and observation ({:s}) should match, cropping!".format(str(sim.shape), str(obs.shape)))
 
             #Get common lon/lat coordinates
@@ -294,8 +292,8 @@ class MatchFiles:
             #Crop simulation
             sim_lon = sim_lon[sim_lon_valid]
             sim_lat = sim_lat[sim_lat_valid]
-            sim = sim[:,:,sim_lat_valid,:]
-            sim = sim[:,:,:,sim_lon_valid]
+            sim = sim[sim_lat_valid,:,:,:]
+            sim = sim[:,sim_lon_valid,:,:]
 
         if (self.verbose):
             self.logger.debug("Size of simulations ({:s}) and observation ({:s})".format(str(sim.shape), str(obs.shape)))
@@ -343,24 +341,36 @@ class MatchFiles:
 
         """
         self.logger.debug("Writing matched file " + out_filename)
-        self.logger.debug("Matched file output size: ({:s})".format(str(obs.shape)))
+
+        n_obs = obs.size
+        self.logger.debug("Number of observations: ({:s})".format(str(n_obs)))
+
+        #Make sure that we have the correct size of
+        assert n_obs == lon.size, str(lon.size)
+        assert n_obs == lat.size, str(lat.size)
+        assert n_obs == obs.size, str(obs.size)
+        if (obs_alt is not None):
+            assert n_obs == obs_alt.size, str(obs_alt.size)
+        assert n_obs == obs_flag.size, str(obs_flag.size)
+        assert n_obs == sim.shape[0], str(sim.shape[0])
 
         try:
             nc_file = Dataset(out_filename, 'w')
-            nc_file.createDimension('lon', len(lon))
-            nc_file.createDimension('lat', len(lat))
-            nc_file.createDimension('time', sim.shape[0])
-            nc_file.createDimension('alt', sim.shape[1])
+
+            nc_file.createDimension('nobs', n_obs)
+            nc_file.createDimension('time', sim.shape[1])
+            nc_file.createDimension('alt', sim.shape[2])
 
             nc_var = {}
-            nc_var['lon'] = nc_file.createVariable('longitude', 'f8', ('lon',))
-            nc_var['lat'] = nc_file.createVariable('latitude', 'f8', ('lat',))
             nc_var['time'] = nc_file.createVariable('time', 'f8', ('time',))
-            nc_var['obs'] = nc_file.createVariable('obs', 'f8', ('lat', 'lon',), zlib=True, fill_value=-1.0)
+
+            nc_var['lon'] = nc_file.createVariable('longitude', 'f8', ('nobs',))
+            nc_var['lat'] = nc_file.createVariable('latitude', 'f8', ('nobs',))
+            nc_var['obs'] = nc_file.createVariable('obs', 'f8', ('nobs',), zlib=True, fill_value=-1.0)
             if (obs_alt is not None):
-                nc_var['obs_alt'] = nc_file.createVariable('obs_alt', 'f8', ('lat', 'lon',), zlib=True, fill_value=-1.0)
-            nc_var['obs_flag'] = nc_file.createVariable('obs_flag', 'f8', ('lat', 'lon',), zlib=True, fill_value=2) #2 == uncertain
-            nc_var['sim'] = nc_file.createVariable('sim', 'f8', ('time', 'alt', 'lat', 'lon',), zlib=True, fill_value=-1.0)
+                nc_var['obs_alt'] = nc_file.createVariable('obs_alt', 'f8', ('nobs',), zlib=True, fill_value=-1.0)
+            nc_var['obs_flag'] = nc_file.createVariable('obs_flag', 'f8', ('nobs',), zlib=True, fill_value=2) #2 == uncertain
+            nc_var['sim'] = nc_file.createVariable('sim', 'f8', ('nobs', 'time', 'alt',), zlib=True, fill_value=-1.0)
 
             nc_var['lon'][:] = lon
             nc_var['lat'][:] = lat
@@ -370,12 +380,12 @@ class MatchFiles:
             nc_var['time'].units = units
             nc_var['time'][:] = [((t - epoch) / datetime.timedelta(days=1)) for t in sim_dates]
 
-            nc_var['obs'][:,:] = obs[:,:]
+            nc_var['obs'][:] = obs
             nc_var['obs'].date_taken = str(obs_time)
             if (obs_alt is not None):
-                nc_var['obs_alt'][:,:] = obs_alt[:,:]
-            nc_var['obs_flag'][:,:] = obs_flag[:,:]
-            nc_var['sim'][:,:,:,:] = sim
+                nc_var['obs_alt'][:] = obs_alt
+            nc_var['obs_flag'][:] = obs_flag
+            nc_var['sim'][:,:,:] = sim
         except Exception as e:
             self.logger.error("Something went wrong:" + str(e))
             raise e
@@ -660,7 +670,7 @@ class MatchFiles:
                         if (r):
                             n_levels += 1
 
-                data = np.ma.masked_all((n_valid, n_levels, ny, nx))
+                data = np.empty((ny, nx, n_valid, n_levels))
                 if (self.verbose):
                     self.logger.debug("nx={:d}, ny={:d}, n_levels={:d}, n_valid={:d}".format(nx, ny, n_levels, n_valid))
 
@@ -702,7 +712,7 @@ class MatchFiles:
                         assert len(r.groups()) == 2, "Something wrong with regex matching"
                         # The levels are numbered from 1
                         level = int(r.group(1)) - 1
-                        data[out_i,level,:,:] = nc_file[varname][timestep,:,:]
+                        data[:, :, out_i, level] = nc_file[varname][timestep,:,:]
                         n_levels_read += 1
                         #if (self.verbose):
                         #    self.logger.debug("Wrote {:d}-{:d} from {:s} (sum={:f})".format(out_i, level, sim_file.filename, np.sum(data[out_i, level, :, :])))
@@ -738,6 +748,12 @@ if __name__ == "__main__":
                         help="Output dir to place matched data into", required=True)
     parser.add("--no_mask_sim", action="store_false",
                         help="Do not mask simulation data in output matched files (requires more storage - used for debugging)")
+    parser.add("--obs_flag_max", type=float, default=1.95,
+                        help="Discard observations with an AF flag greater than this")
+    parser.add("--zero_thinning", type=float, default=0.25,
+                        help="Fraction of zero observations to keep")
+    parser.add("--obs_zero", type=float, default=1.0e-5,
+                        help="Observations less than this treated as zero")
     parser.add("--dummy_observation_json", type=str,
                         help="JSON-file used to generate dummy observation", default=None)
     args = parser.parse_args()
@@ -758,4 +774,7 @@ if __name__ == "__main__":
                    verbose=args.verbose)
     match.match_files(output_dir=args.output_dir,
                       mask_sim=args.no_mask_sim,
+                      obs_flag_max=args.obs_flag_max,
+                      zero_thinning=args.zero_thinning,
+                      obs_zero=args.obs_zero,
                       dummy_observation_json=args.dummy_observation_json)

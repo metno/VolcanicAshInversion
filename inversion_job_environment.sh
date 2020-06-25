@@ -54,10 +54,10 @@
 #$ -R y
 
 ## Standard out logfile
-#$ -o "@OUT_DIR@/cout.log"
+#$ -o "@RUN_DIR@/cout.log"
 
 ## Standard error logfile
-#$ -e "@OUT_DIR@/cerr.log"
+#$ -e "@RUN_DIR@/cerr.log"
 
 set -e #Stop on first error
 
@@ -65,15 +65,15 @@ set -e #Stop on first error
 # Environment to use #
 ######################
 export SCRIPT_DIR="@SCRIPT_DIR@"
-export OUT_DIR="@OUT_DIR@"
+export RUN_DIR="@RUN_DIR@"
 export TAG="@TAG@"
 
-export RUN_PLUME_HEIGHTS="@OUT_DIR@/plume_heights_@TAG@.csv"
-export RUN_CONF_A_PRIORI="@OUT_DIR@/conf_a_priori_@TAG@.ini"
-export RUN_CONF_MATCH_FILES="@OUT_DIR@/conf_match_files_@TAG@.ini"
-export RUN_CONF_INVERSION="@OUT_DIR@/conf_inversion_@TAG@.ini"
-export RUN_OBSERVATIONS="@OUT_DIR@/ash_observations_@TAG@.csv"
-export RUN_SIMULATIONS="@OUT_DIR@/ash_simulations_@TAG@.csv"
+export RUN_PLUME_HEIGHTS="@RUN_DIR@/plume_heights_@TAG@.csv"
+export RUN_CONF_A_PRIORI="@RUN_DIR@/conf_a_priori_@TAG@.ini"
+export RUN_CONF_MATCH_FILES="@RUN_DIR@/conf_match_files_@TAG@.ini"
+export RUN_CONF_INVERSION="@RUN_DIR@/conf_inversion_@TAG@.ini"
+export RUN_OBSERVATIONS="@RUN_DIR@/ash_observations_@TAG@.csv"
+export RUN_SIMULATIONS="@RUN_DIR@/ash_simulations_@TAG@.csv"
 
 export INVERSION_ENVIRONMENT_SETUP=1
 

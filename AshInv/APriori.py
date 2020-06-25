@@ -189,6 +189,7 @@ if __name__ == "__main__":
     logger.debug("Output level heights {:s}".format(str(level_heights)))
 
     output = {
+            'args': vars(args),
             'level_boundaries': level_boundaries,
             'level_heights': level_heights,
             'volcano_altitude': args.volcano_altitude,

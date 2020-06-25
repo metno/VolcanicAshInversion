@@ -37,8 +37,8 @@ if [[ -z "$INVERSION_ENVIRONMENT_SETUP" ]]; then
 fi
 
 RUN_DATE=$(date +"%Y%m%dT%H%MZ")
-SYSTEM_MATRIX_FILE="$OUT_DIR/inversion_system_matrix.npz"
-RESULTS_DIR="$OUT_DIR/results/${TAG}_${RUN_DATE}"
+SYSTEM_MATRIX_FILE="$RUN_DIR/inversion_system_matrix.npz"
+RESULTS_DIR="$RUN_DIR/results/${TAG}_${RUN_DATE}"
 LOGFILE="$RESULTS_DIR/log_running.txt"
 
 #Make output directory and
@@ -97,7 +97,7 @@ inv_exec $SCRIPT_DIR/AshInv/MatchFiles.py \
                     --config "$RUN_CONF_MATCH_FILES" \
                     --simulation_csv "$RUN_SIMULATIONS" \
                     --observation_csv "$RUN_OBSERVATIONS" \
-                    --output_dir "$OUT_DIR/matched_files"
+                    --output_dir "$RUN_DIR/matched_files"
 inv_exec echo "INFO: Done matching files"
 
 
@@ -123,7 +123,7 @@ for SOLVER in "${SOLVERS[@]}"; do
 
     inv_exec $SCRIPT_DIR/AshInv/AshInversion.py \
                     --config "$RUN_CONF_INVERSION" \
-                    --matched_files "$OUT_DIR/matched_files/matched_files.csv" \
+                    --matched_files "$RUN_DIR/matched_files/matched_files.csv" \
                     --a_priori_file "$RESULTS_DIR/a_priori.json" \
                     --solver $SOLVER \
                     $SYSTEM_MATRIX \

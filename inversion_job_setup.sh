@@ -137,7 +137,12 @@ for SRC_FILE in $CONF_DIR/*.* $SCRIPT_DIR/inversion_job_environment.sh; do
         done
     fi
 done
+
+
+
+echo "INFO: Renaming job script"
 JOB_SCRIPT="$RUN_DIR/job_script_${TAG}.sh"
+mv "$RUN_DIR/inversion_job_environment_${TAG}.sh" $JOB_SCRIPT
 
 
 
