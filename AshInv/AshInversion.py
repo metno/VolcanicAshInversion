@@ -147,6 +147,7 @@ class AshInversion():
 
         #Create vectors if empty
         if not hasattr(self, 'x_a'):
+            self.logger.info("Creating new vectors and ordering index")
             self.x_a = np.empty((num_altitudes*num_timesteps), dtype=np.float64)
             self.sigma_x = np.empty((num_altitudes*num_timesteps), dtype=np.float64)
             self.make_ordering_index()
@@ -289,7 +290,7 @@ class AshInversion():
                 for i, t in enumerate(times):
                     ix = np.flatnonzero(self.emission_times == t)
                     if (len(ix) == 0):
-                        self.logger.debug("Time {:s} is from {:s} does not match up with a priori emission!".format(str(t), filename))
+                        self.logger.debug("Time {:s} from {:s} does not match up with a priori emission!".format(str(t), filename))
                     elif (len(ix) == 1):
                         time_index[i] = ix
                     else:
@@ -333,7 +334,7 @@ class AshInversion():
                         altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o])+1)
 
                     #Find valid values and indices
-                    vals = sim[o, time_index, :altitude_max].ravel(order='C')
+                    vals = sim[o, :, :altitude_max].ravel(order='C')
                     indices = self.ordering_index[:altitude_max, time_index].transpose().ravel(order='C')
                     mask = np.nonzero(np.logical_and(indices >= 0, not np.ma.is_masked(vals)))
 
@@ -355,7 +356,7 @@ class AshInversion():
                     #by adding a zero-observation for the altitudes above the ash cloud
                     if (use_elevations):
                         #Find valid values and indices
-                        vals = sim[o, time_index, altitude_max:].ravel(order='C')
+                        vals = sim[o, :, altitude_max:].ravel(order='C')
                         indices = self.ordering_index[altitude_max:, time_index].transpose().ravel(order='C')
                         mask = np.nonzero(np.logical_and(indices >= 0, not np.ma.is_masked(vals)))
 
@@ -377,7 +378,8 @@ class AshInversion():
             timers['end']['tot'] = time.time()
 
             logstr = []
-            logstr += ["nnz={:d}/{:d}".format(
+            logstr += ["{:.1f} %, nnz={:d}/{:d}".format(
+                    100*nnz_counter/M_data.size,
                     nnz_counter,
                     M_data.size)]
             logstr += ["#obs/s={:.1f}".format(n_obs/(timers['end']['tot'] - timers['start']['tot']))]
@@ -398,6 +400,38 @@ class AshInversion():
         self.logger.debug("System matrix created.")
 
 
+    def precompute_matrices(self):
+        self.logger.info("Precomputing matrices")
+        start_precompute = time.time()
+        #Create diagonal matrix for sigma_o^-2
+        sigma_o_m2 = scipy.sparse.dia_matrix((np.power(self.sigma_o, -1), 0), shape=(self.sigma_o.size, self.sigma_o.size)).tocsr()
+
+        #Create right hand side
+        #Y = y_0 - M x_a
+        #B = sigma_o^-2 M^T Y
+        if not hasattr(self, 'B'):
+            Y = self.y_0 - self.M.dot(self.x_a)
+            self.B = self.M.transpose().dot(sigma_o_m2.dot(Y))
+
+        #Compute M^T diag(\sigma_o^-2) M
+        if not hasattr(self, 'Q'):
+            self.Q = ((self.M.transpose().dot(sigma_o_m2)).dot(self.M)).toarray()
+
+        end_precompute = time.time()
+        self.logger.info("Precomputed matrices in {:.1f} s".format(end_precompute - start_precompute))
+
+
+
+
+    #@profile
+    def plotAshInvMatrix(self, fig=None, matrix=None, downsample=True):
+        if (matrix is None):
+            return Plot.plotAshInvMatrix(self.M, fig, downsample)
+        else:
+            return Plot.plotAshInvMatrix(matrix, fig, downsample)
+
+
+
     #@profile
     def save_matrices(self, outname):
         """
@@ -405,7 +439,9 @@ class AshInversion():
         """
         self.logger.info("Writing matrices to {:s}".format(outname))
         self.logger.info("System size {:s}".format(str(self.M.shape)))
-        np.savez_compressed(outname,
+        tic = time.time()
+        #np.savez_compressed(outname,
+        np.savez(outname,
                      M_data=self.M.data,
                      M_indices=self.M.indices,
                      M_indptr=self.M.indptr,
@@ -418,14 +454,8 @@ class AshInversion():
                      level_heights=self.level_heights,
                      volcano_altitude=self.volcano_altitude,
                      emission_times=self.emission_times)
-
-
-    #@profile
-    def plotAshInvMatrix(self, fig=None, matrix=None, downsample=True):
-        if (matrix is None):
-            return Plot.plotAshInvMatrix(self.M, fig, downsample)
-        else:
-            return Plot.plotAshInvMatrix(matrix, fig, downsample)
+        toc = time.time()
+        self.logger.info("Wrote to disk in {:.0f} s".format(toc-tic))
 
 
 
@@ -553,6 +583,9 @@ class AshInversion():
 
 
 
+
+
+
     #@profile
     def iterative_inversion(self, solver='direct',
                             max_iter=100,
@@ -581,7 +614,6 @@ class AshInversion():
         assert n_obs == self.y_0.size, "y_0 has the wrong shape (should be number of observations, {:d}, but got {:d})".format(n_obs, self.y_0.size)
         assert n_emis == self.x_a.size, "x_a has the wrong shape (should be number of emissions, {:d}, but got {:d})".format(n_emis, self.x_a.size)
 
-        start_precompute = time.time()
         #Create second derivative matrix D
         D = np.zeros((n_emis, n_emis))
         np.fill_diagonal(D[1:], 1)
@@ -591,22 +623,7 @@ class AshInversion():
         D[-1, -1] = -1
         DTD = np.matmul(D.transpose(), D)
 
-        #Create diagonal matrix for sigma_o^-2
-        sigma_o_m2 = scipy.sparse.dia_matrix((np.power(self.sigma_o, -1), 0), shape=(n_obs, n_obs)).tocsr()
-
-        #Create right hand side
-        #Y = y_0 - M x_a
-        #B = sigma_o^-2 M^T Y
-        if not hasattr(self, 'B'):
-            Y = self.y_0 - self.M.dot(self.x_a)
-            self.B = self.M.transpose().dot(sigma_o_m2.dot(Y))
-
-        #Compute M^T diag(\sigma_o^-2) M
-        if not hasattr(self, 'Q'):
-            self.Q = ((self.M.transpose().dot(sigma_o_m2)).dot(self.M)).toarray()
-
-        end_precompute = time.time()
-        self.logger.info("Precomputed matrices in {:.1f} s".format(end_precompute - start_precompute))
+        self.precompute_matrices()
 
         #These solvers do not change a priori uncertainty - no use in using multiple iterations
         if (solver=='nnls' or solver == 'lstsq' or a_priori_epsilon == 0.0):

@@ -196,14 +196,15 @@ class MatchFiles:
 
             #Thinning observations of no ash observations:
             n_remove_zero = 0
-            zeros = (obs <= obs_zero)
-            n_total_zero = np.count_nonzero(zeros)
+            zeros = np.nonzero(obs <= obs_zero)
+            n_total_zero = zeros.size
             if (zero_thinning < 1.0):
-                r = np.random.random(obs.shape)
-                remove = zeros & (r > zero_thinning)
-                n_remove_zero = np.count_nonzero(remove)
+                r = np.random.random(zeros.shape)
+                remove = zeros[r < zero_thinning]
+                n_remove_zero = remove.size
                 if (n_remove_zero > 0):
-                    keep = ~remove
+                    keep = np.ones(obs.shape, dtype=np.bool)
+                    keep[remove] = False
                     obs = obs[keep]
                     obs_flag = obs_flag[keep]
                     if (obs_alt is not None):
