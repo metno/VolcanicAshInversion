@@ -196,9 +196,9 @@ class MatchFiles:
 
             #Thinning observations of no ash observations:
             n_remove_zero = 0
-            zeros = np.nonzero(obs <= obs_zero)
+            zeros = np.flatnonzero(obs <= obs_zero)
             n_total_zero = zeros.size
-            if (zero_thinning < 1.0):
+            if (zero_thinning > 0.0):
                 r = np.random.random(zeros.shape)
                 remove = zeros[r < zero_thinning]
                 n_remove_zero = remove.size
