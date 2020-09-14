@@ -29,7 +29,7 @@ import datetime
 import logging
 import pprint
 import time
-from netCDF4 import Dataset, num2date
+import netCDF4
 import glob
 import os
 import re
@@ -40,6 +40,7 @@ import scipy.linalg
 import scipy.optimize
 import gc
 import psutil
+import importlib
 
 #Enable this to profile memory
 #from memory_profiler import profile
@@ -206,7 +207,8 @@ class AshInversion():
                            obs_min_error=5.0e-3,
                            obs_zero_error_scale=1e2,
                            use_elevations=False,
-                           store_full_matrix=False):
+                           store_full_matrix=False,
+                           progress_file=None):
         """
         Read the matched data and create the system matrix
 
@@ -238,13 +240,21 @@ class AshInversion():
         #Check if we have observed altitudes
         #Then we double the number of observations: ash up to altitude, no ash above
         level_altitudes = np.cumsum(self.level_heights) + self.volcano_altitude
-        with Dataset(os.path.join(matched_file_dir, matched_files_df.matched_file[0])) as nc_file:
+        try:
+            nc_filename = os.path.join(matched_file_dir, matched_files_df.matched_file[0])
+            nc_file = netCDF4.Dataset(nc_filename)
             if (use_elevations and 'obs_alt' in nc_file.variables.keys()):
                 self.logger.info("Using altitudes in inversion")
                 total_num_obs *= 2
             else:
                 use_elevations = False
                 self.logger.info("Altitudes not used for inversion")
+        except Exception as e:
+            self.logger.error("Could not open NetCDF dataset {:s}".format(nc_filename))
+            raise e
+        finally:
+            nc_file.close()
+            nc_file = None
 
         def npTimeToDatetime(np_time):
             return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's'))
@@ -272,6 +282,7 @@ class AshInversion():
         #This forces allocation and initialization of data
         #Really important for speed. Without this, numpy appears to
         #reallocate and move all the data around
+        nnz_counter = 0
         if (store_full_matrix):
             self.logger.info("Storing matrix M explicitly")
             self.logger.info("Will try to allocate {:d}x{:d} matrix with {:d} non-zeros (~{:.1f} GB)".format(
@@ -286,13 +297,13 @@ class AshInversion():
             M_data.fill(0.0)
             M_indices.fill(0)
             M_indptr.fill(0)
-            nnz_counter = 0
 
         #LSQR system matrix Q and right hand side B
         self.Q = np.zeros((num_emissions, num_emissions), dtype=np.float64)
         self.B = np.zeros((num_emissions), dtype = np.float64)
         Q_c = np.zeros_like(self.Q)
         B_c = np.zeros_like(self.B)
+        sum_counter = 0
 
         #Right hand sides
         self.y_0 = np.zeros((total_num_obs), dtype=np.float64)
@@ -302,38 +313,50 @@ class AshInversion():
         #Loop over all observations and assemble row by row into matrix
         n_removed = 0
         obs_counter = 0
+        current_index = 0
+
+        #Read existing progress file
+        if (progress_file is not None and os.path.exists(progress_file)):
+            extra_data = self.load_matrices(progress_file)
+            n_removed = extra_data['n_removed']
+            obs_counter = extra_data['obs_counter']
+            current_index = extra_data['current_index']
+            nnz_counter = extra_data['nnz_counter']
+            Q_c = extra_data['Q_c']
+            B_c = extra_data['B_c']
+
         start_assembly = time.time()
-        for row in matched_files_df.itertuples():
-            timers = { 'start': {}, 'end': {} }
-            timers['start']['tot'] = time.time()
-            gc.collect()
+        next_save_time = time.time()
+        run_eta = None
+        for row_index, row in enumerate(matched_files_df.itertuples()):
+            #Skip already processed rows
+            if (row_index < current_index):
+                self.logger.info("Skipping row {:d}".format(row_index))
+                continue
 
             filename = row.matched_file
             filename = os.path.join(matched_file_dir, filename)
             if (self.args['verbose'] > 50):
                 self.logger.debug("Reading {:s}".format(row.matched_file))
 
-            #Print progress every 10% of files
-            if ((row.Index+1) % max(1, (num_files // 10)) == 0):
-                percent_complete = (100*(obs_counter+n_removed+1)) / total_num_obs
-                eta = (time.time()-start_assembly)/percent_complete*(100-percent_complete)
-                self.logger.info("Processing file {:d}/{:d}: {:02.0f} % completed. ETA={:s}".format(
-                    (row.Index+1),
-                    num_files,
-                    percent_complete,
-                    str(datetime.timedelta(seconds=eta))))
-                self.logger.info("Processing {:s}\nCPU: {:.1f} %, Memory: {:.1f} GB".format(
-                    row.matched_file,
-                    psutil.cpu_percent(1),
-                    self.get_memory_usage_gb()))
-
             if(row.num_observations == 0):
                 continue
 
-            with Dataset(filename) as nc_file:
+            timers = { 'start': {}, 'end': {} }
+            timers['start']['tot'] = time.time()
+
+            try:
+                timers['start']['dsk'] = time.time()
+
+                #NetCDF4 leaks stuff. Try reloading every n-th file
+                if (row_index % 10 == 0):
+                    importlib.reload(netCDF4)
+                    gc.collect()
+
+                nc_file = netCDF4.Dataset(filename)
                 #Get the indices for the time which corresponds to the a-priori data
                 unit = nc_file['time'].units
-                times = num2date(nc_file['time'][:], units = unit).astype('datetime64[ns]')
+                times = netCDF4.num2date(nc_file['time'][:], units = unit).astype('datetime64[ns]')
                 #time_index = np.flatnonzero(np.isin(self.emission_times, time))
                 time_index = np.full(times.shape, -1, dtype=np.int32)
                 for i, t in enumerate(times):
@@ -352,7 +375,6 @@ class AshInversion():
                     self.logger.debug("Time indices: {:s}".format(str(time_index)))
 
                 #Get observations that are unmasked
-                timers['start']['dsk'] = time.time()
                 obs = nc_file['obs'][:]
                 n_obs = len(obs)
 
@@ -364,160 +386,228 @@ class AshInversion():
                 #Read simulation data from disk
                 sim = nc_file['sim'][:,:,:]
                 timers['end']['dsk'] = time.time()
+            except Exception as e:
+                self.logger.error("Could not open NetCDF file {:s}".format(filename))
+                raise e
+            finally:
+                nc_file.close()
+                nc_file = None
 
-                #Check sizes
-                assert (n_obs == row.num_observations), "Number of unmasked observations {:d} does not match up with expected {:d}".format(n_obs, row.num_observations)
-                assert (row.num_observations == sim.shape[0]), "Number of observations {:d} does not match expected {:d}".format(row.num_observations, sim.shape[0])
-                assert (row.num_timesteps == sim.shape[1]), "Number of timesteps {:d} does not match up to number of sims {:d}".format(row.num_timesteps, sim.shape[1])
-                assert (row.num_altitudes == sim.shape[2]), "Number of altitudes {:d} does not match up to number of sims {:d}".format(row.num_altitudes, sim.shape[2])
-                assert (row.num_altitudes == self.level_heights.size), "Number of altitudes does not match a priori!"
-                if (self.args['verbose'] > 50):
-                    self.logger.debug("#obs={:d} ({:d}/{:d}), #time={:d}, #alt={:d}".format(n_obs, obs_counter, total_num_obs, row.num_timesteps, row.num_altitudes))
+            #Check sizes
+            assert (n_obs == row.num_observations), "Number of unmasked observations {:d} does not match up with expected {:d}".format(n_obs, row.num_observations)
+            assert (row.num_observations == sim.shape[0]), "Number of observations {:d} does not match expected {:d}".format(row.num_observations, sim.shape[0])
+            assert (row.num_timesteps == sim.shape[1]), "Number of timesteps {:d} does not match up to number of sims {:d}".format(row.num_timesteps, sim.shape[1])
+            assert (row.num_altitudes == sim.shape[2]), "Number of altitudes {:d} does not match up to number of sims {:d}".format(row.num_altitudes, sim.shape[2])
+            assert (row.num_altitudes == self.level_heights.size), "Number of altitudes does not match a priori!"
+            if (self.args['verbose'] > 50):
+                self.logger.debug("#obs={:d} ({:d}/{:d}), #time={:d}, #alt={:d}".format(n_obs, obs_counter, total_num_obs, row.num_timesteps, row.num_altitudes))
 
-                #Initialize timers for assembly loop
-                timers['start']['asm0'] = 0
-                timers['end']['asm0'] = 0
-                timers['start']['asm1'] = 0
-                timers['end']['asm1'] = 0
-                if (store_full_matrix):
-                    timers['start']['asm2'] = 0
-                    timers['end']['asm2'] = 0
+            #Initialize timers for assembly loop
+            timers['start']['asm0'] = 0
+            timers['end']['asm0'] = 0
+            timers['start']['asm1'] = 0
+            timers['end']['asm1'] = 0
+            timers['start']['asm2'] = 0
+            timers['end']['asm2'] = 0
+            if (store_full_matrix):
+                timers['start']['asm3'] = 0
+                timers['end']['asm3'] = 0
 
-                #  Assemble system matrix
-                timers['start']['asm'] = time.time()
-                for o in range(n_obs):
-                    #Set up fo rusing ash cloud top observatoins
-                    altitude_max = row.num_altitudes
-                    if (use_elevations):
-                        altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o])+1)
+            #  Assemble system matrix
+            timers['start']['asm'] = time.time()
+            max_i_width = 0
+            for o in range(n_obs):
+                #Set up fo rusing ash cloud top observatoins
+                altitude_max = row.num_altitudes
+                if (use_elevations):
+                    altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o])+1)
 
 
-                    self.y_0[obs_counter] = obs[o]*scale_observation
-                    #FIXME Birthe uses constant standard deviation here.
-                    sigma_o = obs[o]*scale_observation*1.0
+                self.y_0[obs_counter] = obs[o]*scale_observation
+                #FIXME Birthe uses constant standard deviation here.
+                sigma_o = obs[o]*scale_observation*1.0
+                if (self.y_0[obs_counter] > obs_zero):
+                    self.sigma_o[obs_counter] = np.sqrt(sigma_o**2 + obs_model_error**2 + obs_min_error**2)
+                else:
+                    #Increase error for zero observations
+                    self.sigma_o[obs_counter] = np.sqrt(sigma_o**2 + obs_model_error**2 + obs_min_error**2*obs_zero_error_scale**2)
+
+
+                #Find valid values and indices
+                #Valid = not masked index && value > 0 && not masked
+                timers['start']['asm0'] += time.time()
+                vals = sim[o, :, :altitude_max].ravel(order='C')
+                indices = self.ordering_index[:altitude_max, time_index].transpose().ravel(order='C')
+                valid_vals = np.flatnonzero(indices >= 0)
+                valid_vals = valid_vals[vals[valid_vals] > 1.0e-15]
+
+                vals = vals[valid_vals]*scale_emission
+                indices = indices[valid_vals]
+                timers['end']['asm0'] += time.time()
+
+                if (indices.size > 0):
+                    #Compute matrix product Q = M^T sigma_o^-2 M without storing M
+                    #Uses clever (basic) indexing to avoid superfluous copying of data
+                    timers['start']['asm1'] += time.time()
+                    i_min = indices.min()
+                    i_max = indices.max()+1
+                    max_i_width = max(i_max-i_min-1, max_i_width)
+                    v = np.zeros(i_max - i_min)
+                    v[indices-i_min] = vals
+                    V = np.outer(v/(self.sigma_o[obs_counter]**2), v)
+                    timers['end']['asm1'] += time.time()
+                    timers['start']['asm2'] += time.time()
+                    Q_c[i_min:i_max, i_min:i_max] += V
+                    timers['end']['asm2'] += time.time()
+
+                    #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
+                    B_c[i_min:i_max] += v*(self.y_0[obs_counter] - np.dot(v, self.x_a[i_min:i_max])) / (self.sigma_o[obs_counter]**2)
+
+                    if (store_full_matrix):
+                        timers['start']['asm3'] += time.time()
+                        nnz_next = nnz_counter+vals.size
+                        M_indices[nnz_counter:nnz_next] = indices
+                        M_data[nnz_counter:nnz_next] = vals
+                        M_indptr[obs_counter+1] = vals.size
+                        nnz_counter = nnz_next
+                        timers['end']['asm3'] += time.time()
+
+                obs_counter = obs_counter+1
+
+
+                #This part implements top of ash cloud observation into the system
+                #by adding a zero-observation for the altitudes above the ash cloud
+                if (use_elevations):
+                    #FIXME What should the standard deviation be here?
+                    self.y_0[obs_counter] = 0.0 #Zero oserved ash here
+                    sigma_o = 0.0
                     if (self.y_0[obs_counter] > obs_zero):
                         self.sigma_o[obs_counter] = np.sqrt(sigma_o**2 + obs_model_error**2 + obs_min_error**2)
                     else:
                         #Increase error for zero observations
                         self.sigma_o[obs_counter] = np.sqrt(sigma_o**2 + obs_model_error**2 + obs_min_error**2*obs_zero_error_scale**2)
 
-
                     #Find valid values and indices
-                    vals = sim[o, :, :altitude_max].ravel(order='C')*scale_emission
-                    indices = self.ordering_index[:altitude_max, time_index].transpose().ravel(order='C')
-                    mask = np.nonzero(np.logical_and(indices >= 0, not np.ma.is_masked(vals)))
-                    vals = vals[mask]
-                    indices = indices[mask]
+                    #Valid = not masked index && value > 0 && not masked
+                    vals = sim[o, :, altitude_max:].ravel(order='C')
+                    indices = self.ordering_index[altitude_max:, time_index].transpose().ravel(order='C')
+                    valid_vals = np.flatnonzero(np.logical_and(indices >= 0, np.logical_and(vals > 1.0e-15, not np.ma.is_masked(vals))))
 
-                    if (vals.max() > 0.0):
-                        #Compute matrix product Q = M^T sigma_o^-2 M without storing M
-                        #Uses clever (basic) indexing to avoid superfluous copying of data
-                        timers['start']['asm0'] += time.time()
+                    vals = vals[valid_vals]*scale_emission
+                    indices = indices[valid_vals]
+
+                    #Compute matrix product Q = M^T sigma_o^-2 M without storing M
+                    #Uses clever (basic) indexing to avoid superfluous copying of data
+                    if (indices.size > 0):
+                        timers['start']['asm1'] += time.time()
                         i_min = indices.min()
                         i_max = indices.max()+1
                         v = np.zeros(i_max - i_min)
                         v[indices-i_min] = vals
                         V = np.outer(v/(self.sigma_o[obs_counter]**2), v)
-                        timers['end']['asm0'] += time.time()
-                        timers['start']['asm1'] += time.time()
-                        Q_c[i_min:i_max, i_min:i_max] += V
                         timers['end']['asm1'] += time.time()
-
-                        #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                        B_c[indices] += vals*(self.y_0[obs_counter] - np.dot(vals, self.x_a[indices])) / (self.sigma_o[obs_counter]**2)
-
-                        #Increase accuracy by grouping additions (ref Kahan summation and rounding)
-                        if (o % 1000 == 999) or (o == n_obs-1):
-                            self.Q += Q_c
-                            self.B += B_c
-
-                            Q_c.fill(0.0)
-                            B_c.fill(0.0)
-
-                    if (store_full_matrix):
                         timers['start']['asm2'] += time.time()
-                        nnz_next = nnz_counter+vals.size
-                        M_indices[nnz_counter:nnz_next] = indices
-                        M_data[nnz_counter:nnz_next] = vals
-                        M_indptr[obs_counter+1] = nnz_next
-                        nnz_counter = nnz_next
+                        Q_c[i_min:i_max, i_min:i_max] += V
                         timers['end']['asm2'] += time.time()
 
-                    obs_counter = obs_counter+1
-
-                    #This part implements top of ash cloud observation into the system
-                    #by adding a zero-observation for the altitudes above the ash cloud
-                    if (use_elevations):
-                        #FIXME What should the standard deviation be here?
-                        self.y_0[obs_counter] = 0.0 #Zero oserved ash here
-                        self.sigma_o[obs_counter] = 0.0
-
-                        #Find valid values and indices
-                        vals = sim[o, :, altitude_max:].ravel(order='C')
-                        indices = self.ordering_index[altitude_max:, time_index].transpose().ravel(order='C')
-                        mask = np.nonzero(np.logical_and(indices >= 0, not np.ma.is_masked(vals)))
-
-                        vals = vals[mask]
-                        indices = indices[mask]
-
-                        #Compute matrix product Q = M^T sigma_o^-2 M without storing M
-                        #Uses clever (basic) indexing to avoid superfluous copying of data
-                        timers['start']['asm0'] += time.time()
-                        i_min = indices.min()
-                        i_max = indices.max()+1
-                        v = np.zeros(i_max - i_min)
-                        v[indices-i_min] = vals
-                        V = np.outer(v/(self.sigma_o[obs_counter]**2), v)
-                        timers['end']['asm0'] += time.time()
-                        timers['start']['asm1'] += time.time()
-                        Q_c[i_min:i_max, i_min:i_max] += V
-                        timers['end']['asm1'] += time.time()
-
                         #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                        B_c[indices] += vals*(self.y_0[obs_counter] - np.dot(vals, self.x_a[indices])) / (self.sigma_o[obs_counter]**2)
-
-                        #Increase accuracy by grouping additions (ref Kahan summation and rounding)
-                        if (o % 1000 == 999) or (o == n_obs-1):
-                            self.Q += Q_c
-                            self.B += B_c
-
-                            Q_c.fill(0.0)
-                            B_c.fill(0.0)
+                        B_c[i_min:i_max] += v*(self.y_0[obs_counter] - np.dot(v, self.x_a[i_min:i_max])) / (self.sigma_o[obs_counter]**2)
 
                         if (store_full_matrix):
-                            timers['start']['asm2'] += time.time()
+                            timers['start']['asm3'] += time.time()
                             nnz_next = nnz_counter+vals.size
                             M_indices[nnz_counter:nnz_next] = indices
                             M_data[nnz_counter:nnz_next] = vals
-                            M_indptr[obs_counter+1] = nnz_next
+                            M_indptr[obs_counter+1] = vals.size
                             nnz_counter = nnz_next
-                            timers['end']['asm2'] += time.time()
+                            timers['end']['asm3'] += time.time()
 
-                        obs_counter = obs_counter+1
+                    obs_counter = obs_counter+1
 
-                timers['end']['asm'] = time.time()
+
+
+            #Increase accuracy by grouping additions
+            #(ref Kahan summation and rounding)
+            sum_counter += n_obs
+            last_row = row_index+1 == matched_files_df.shape[0]
+            if ((sum_counter > 1.0e5) or last_row):
+                if  not last_row:
+                    valid_Q = self.Q > 0.0
+                    if (np.sum(valid_Q) > 0):
+                        valid_Q = np.logical_and(Q_c > 0.0, valid_Q, (Q_c / self.Q) > 1.0e-5)
+                    else:
+                        valid_Q = Q_c > 0.0
+
+                    valid_B = self.B > 0.0
+                    if (np.sum(valid_B) > 0):
+                        valid_B = np.logical_and(B_c > 0.0, valid_B, (B_c / self.B) > 1.0e-5)
+                    else:
+                        valid_B = B_c > 0.0
+                else:
+                    valid_Q = Q_c > 0.0
+                    valid_B = B_c > 0.0
+
+                num_valid_Q = np.sum(valid_Q)
+                num_valid_B = np.sum(valid_B)
+
+                self.logger.info("#valid Q={:d}".format(num_valid_Q))
+                self.logger.info("#valid B={:d}".format(num_valid_B))
+
+                if (num_valid_Q > 0):
+                    self.Q[valid_Q] += Q_c[valid_Q]
+                    Q_c[valid_Q] = 0.0
+
+                if (num_valid_B > 0):
+                    self.B[valid_B] += B_c[valid_B]
+                    B_c[valid_B] = 0.0
+
+                sum_counter = 0
+
+            timers['end']['asm'] = time.time()
             timers['end']['tot'] = time.time()
 
+            #Save progress every 5 minutes (for restarting jobs)
+            if ((progress_file is not None) and (time.time() > next_save_time)):
+                self.logger.info("Writing progress file for restarting")
+                current_index = row_index+1
+                extra_data =  {
+                    'Q_c': Q_c,
+                    'B_c': B_c,
+                    'obs_counter': obs_counter,
+                    'n_removed': n_removed,
+                    'current_index': current_index,
+                    'nnz_counter': nnz_counter
+                }
+                self.save_matrices(progress_file, extra_data)
+                next_save_time = time.time() + 5*60
+
             logstr = []
-            eta = ((time.time() - start_assembly)/obs_counter)*(total_num_obs-obs_counter)
-            logstr += ["ETA {:s}".format(str(datetime.timedelta(seconds=eta)))]
-            logstr += ["{:.1f} % (obs={:d}/{:d})".format(
-                    100*obs_counter/total_num_obs,
-                    obs_counter,
-                    total_num_obs)]
+            new_run_eta = ((timers['end']['tot'] - timers['start']['tot'])/n_obs)*(total_num_obs-obs_counter)
+            if (run_eta is None):
+                run_eta = new_run_eta
+            else:
+                run_eta = 0.9*run_eta + 0.1*new_run_eta
+            logstr += ["i={:d}".format(row_index)]
+            logstr += ["ETA {:s}".format(str(datetime.timedelta(seconds=run_eta)))]
+            logstr += ["{:.1f} %".format(100*obs_counter/total_num_obs)]
+            logstr += ["#obs={:d}".format(n_obs)]
             logstr += ["#obs/s={:.1f}".format(n_obs/(timers['end']['tot'] - timers['start']['tot']))]
             logstr += ["mem={:.1f} GB".format(self.get_memory_usage_gb())]
             for key in timers['start'].keys():
                 logstr += ["{:s}={:.1f} s".format(key, timers['end'][key] - timers['start'][key])]
+            logstr += ["width={:d}".format(max_i_width)]
             self.logger.info(", ".join(logstr))
+
+
 
         #Finally resize matrix to match actually used observations
         if (store_full_matrix):
-            self.logger.info("Reshaping M from {:d} to {:d} rows with {:d} nonzeros".format(total_num_obs, obs_counter, nnz_counter))
             M_indices.resize(nnz_counter)
             M_data.resize(nnz_counter)
-            M_indptr.resize(obs_counter+1)
-            self.M = scipy.sparse.csr_matrix((M_data, M_indices, M_indptr), shape=(obs_counter, num_emissions))
+            M_indptr = np.cumsum(M_indptr)
+
+            self.logger.info("Reshaping M from {:d}x{:d} to {:d}x{:d} with {:d} nonzeros".format(total_num_obs, num_emissions, M_indptr.size-1, num_emissions, nnz_counter))
+            self.M = scipy.sparse.csr_matrix((M_data, M_indices, M_indptr), shape=(M_indptr.size-1, num_emissions))
 
 
         self.y_0 = self.y_0[:obs_counter]
@@ -539,7 +629,7 @@ class AshInversion():
 
 
     #@profile
-    def save_matrices(self, outname):
+    def save_matrices(self, outname, extra_data={}):
         """
         Save matrices to file.
         """
@@ -563,6 +653,7 @@ class AshInversion():
             data['M_indices'] = self.M.indices
             data['M_indptr'] = self.M.indptr
             data['M_shape'] = self.M.shape
+        data.update(extra_data)
 
         np.savez(outname, **data)
         toc = time.time()
@@ -578,23 +669,29 @@ class AshInversion():
         self.logger.info("Initializing from existing matrices")
         gc.collect()
         self.logger.info("Memory used pre load: {:.1f} GB".format(self.get_memory_usage_gb()))
-        with np.load(inname) as data:
-            self.B = data['B']
-            self.Q = data['Q']
-            self.y_0 = data['y_0']
-            self.x_a = data['x_a']
-            self.sigma_o = data['sigma_o']
-            self.sigma_x = data['sigma_x']
-            self.ordering_index = data['ordering_index']
-            self.level_heights = data['level_heights']
-            self.volcano_altitude = data['volcano_altitude']
-            self.emission_times = data['emission_times']
+        data = {}
+        with np.load(inname) as npz_file:
+            for key in npz_file.keys():
+                data[key] = npz_file[key]
+
+            self.B = data.pop('B')
+            self.Q = data.pop('Q')
+            self.y_0 = data.pop('y_0')
+            self.x_a = data.pop('x_a')
+            self.sigma_o = data.pop('sigma_o')
+            self.sigma_x = data.pop('sigma_x')
+            self.ordering_index = data.pop('ordering_index')
+            self.level_heights = data.pop('level_heights')
+            self.volcano_altitude = data.pop('volcano_altitude')
+            self.emission_times = data.pop('emission_times')
             if 'M_data' in data.keys():
                 self.logger.info("Loading full system matrix M")
-                self.M = scipy.sparse.csr_matrix((data['M_data'], data['M_indices'], data['M_indptr']), shape=data['M_shape'])
+                self.M = scipy.sparse.csr_matrix((data.pop('M_data'), data.pop('M_indices'), data.pop('M_indptr')), shape=data.pop('M_shape'))
 
         self.logger.info("Memory used post load: {:.1f} GB".format(self.get_memory_usage_gb()))
         self.logger.info("Ordering index size: {:s}".format(str(np.count_nonzero(self.ordering_index >= 0))))
+
+        return data
 
 
 
@@ -830,6 +927,10 @@ if __name__ == '__main__':
                         help="A priori emission json file")
     input_args.add("--input_unscaled", type=str, default=None,
                         help="Previously generated unscaled system matrices to run inversion on.")
+    input_args.add("--progress_file", type=str, default=None,
+                        help="Progress file to continue running an aborted run")
+    input_args.add("--store_full_matrix", action="store_true",
+                        help="Store the full M matrix (very slow - mostly for debugging)")
     input_args.add("--use_elevations", action='store_true',
                         help="Enable use of ash cloud elevations in inversion")
 
@@ -916,7 +1017,9 @@ if __name__ == '__main__':
         ash_inv.make_system_matrix(args.matched_files,
                                 scale_emission=args.scale_emission,
                                 scale_observation=args.scale_observation,
-                                use_elevations=args.use_elevations
+                                use_elevations=args.use_elevations,
+                                progress_file=args.progress_file,
+                                store_full_matrix=args.store_full_matrix,
                                 )
         ash_inv.save_matrices(unscaled_file)
 
@@ -959,17 +1062,22 @@ if __name__ == '__main__':
         print("Writing output to {:s}".format(output_file))
         with open(output_file, 'w') as outfile:
             output = {
-                'a_posteriori_2d': ash_inv.x.tolist(),
-                'a_priori_2d': ash_inv.x_a.tolist(),
-                'ordering_index': ash_inv.ordering_index.tolist(),
+                'a_posteriori_2d': ash_inv.x,
+                'a_priori_2d': ash_inv.x_a,
+                'ordering_index': ash_inv.ordering_index,
                 'volcano_altitude': ash_inv.volcano_altitude,
-                'level_heights': ash_inv.level_heights.tolist(),
-                'emission_times': ash_inv.emission_times.tolist(),
+                'level_heights': ash_inv.level_heights,
+                'emission_times': ash_inv.emission_times,
                 'residual': ash_inv.residual,
                 'convergence': ash_inv.convergence
             }
             output.update(run_meta)
-            json.dump(output, outfile)
+            class NumpyEncoder(json.JSONEncoder):
+                def default(self, obj):
+                    if isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    return json.JSONEncoder.default(self, obj)
+            json.dump(output, outfile, cls=NumpyEncoder)
 
     #Exit
     print("Inversion procedure complete - output in {:s}".format(args.output_dir))

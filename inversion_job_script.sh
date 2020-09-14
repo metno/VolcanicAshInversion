@@ -121,13 +121,18 @@ for SOLVER in "${SOLVERS[@]}"; do
         SYSTEM_MATRIX="--input_unscaled=$SYSTEM_MATRIX_FILE"
     fi
 
+    #Run inversion (with progress file)
     inv_exec $SCRIPT_DIR/AshInv/AshInversion.py \
                     --config "$RUN_CONF_INVERSION" \
+                    --progress_file "$RUN_DIR/progress.npz" \
                     --matched_files "$RUN_DIR/matched_files/matched_files.csv" \
                     --a_priori_file "$RESULTS_DIR/a_priori.json" \
                     --solver $SOLVER \
                     $SYSTEM_MATRIX \
                     --output_dir "$RUN_RESULTS_DIR"
+
+    #Remove progress file
+    inv_exec rm "$RUN_DIR/progress.npz"
 
     #Symlink system matrix for subsequent runs.
     if [ ! -e $SYSTEM_MATRIX_FILE ]; then

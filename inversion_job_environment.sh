@@ -81,7 +81,6 @@ export INVERSION_ENVIRONMENT_SETUP=1
 # Set up Python #
 #################
 source $SCRIPT_DIR/inversion_job_conda.sh
-trap cleanup_conda ERR EXIT KILL SIGTERM
 
 ##########################
 # Call actual job script #

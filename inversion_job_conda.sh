@@ -28,34 +28,44 @@ if [[ $_ == $0 ]]; then
     exit -1
 fi
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-CONDA_EXE="$SCRIPT_DIR/miniconda3/bin/conda"
-CONDA_ENV_PATH="$SCRIPT_DIR/conda_ash_inv"
+if [ $CONDA_INITIALIZED == 1 ]; then
+    echo "Conda already initialized"
+else
+    SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+    CONDA_EXE="$SCRIPT_DIR/miniconda3/bin/conda"
+    CONDA_ENV_PATH="$SCRIPT_DIR/conda_ash_inv"
 
 
-# Check that conda has been set up correctly
-if [[ ! -f $CONDA_EXE ]]; then
-    echo "ERROR: Conda has not been set up correctly! Please download and install conda"
-    exit -1
-fi
-if [[ ! -d $CONDA_ENV_PATH ]]; then
-    echo "ERROR: Conda environment has not been set up correctly! Please set up environment"
-    exit -1
-fi
-
-
-# Setup conda environment
-eval "$($CONDA_EXE shell.bash hook)"
-conda activate $CONDA_ENV_PATH
-
-
-#Clean up function
-# use "trap cleanup_conda ERR EXIT KILL SIGTERM"
-# to try to auto-cleanup
-function cleanup_conda {
-    if [ ! $? -eq 0 ]; then
-        echo "ERROR: Something failed!"
+    # Check that conda has been set up correctly
+    if [[ ! -f $CONDA_EXE ]]; then
+        echo "ERROR: Conda has not been set up correctly! Please download and install conda"
+        exit -1
     fi
-    echo "INFO: Deactivating Conda"
-    conda deactivate
-}
+    if [[ ! -d $CONDA_ENV_PATH ]]; then
+        echo "ERROR: Conda environment has not been set up correctly! Please set up environment"
+        exit -1
+    fi
+
+
+    # Setup conda environment
+    eval "$($CONDA_EXE shell.bash hook)"
+    conda activate $CONDA_ENV_PATH
+
+
+    #Clean up function
+    function cleanup_conda {
+        if [ $CONDA_INITIALIZED == 1 ]; then
+            if [ ! $? -eq 0 ]; then
+                echo "ERROR: Something failed!"
+            fi
+            echo "INFO: Deactivating Conda"
+            conda deactivate
+            export CONDA_INITIALIZED=0
+        fi
+    }
+
+    #Cleanup conda on exit
+    trap cleanup_conda ERR EXIT KILL SIGTERM
+
+    export CONDA_INITIALIZED=1
+fi

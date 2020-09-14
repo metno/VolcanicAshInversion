@@ -28,6 +28,7 @@ import pandas as pd
 import datetime
 import logging
 import pprint
+import time
 from netCDF4 import Dataset, num2date
 import os
 import re
@@ -200,7 +201,7 @@ class MatchFiles:
             n_total_zero = zeros.size
             if (zero_thinning > 0.0):
                 r = np.random.random(zeros.shape)
-                remove = zeros[r < zero_thinning]
+                remove = zeros[r <= zero_thinning]
                 n_remove_zero = remove.size
                 if (n_remove_zero > 0):
                     keep = np.ones(obs.shape, dtype=np.bool)
@@ -564,11 +565,18 @@ class MatchFiles:
         assert netcdf_observation_error_varnames is not None, "Could not get ash flag variable name"
 
         # Fix improper valid_min
-        with Dataset(filename, mode='r+') as nc_file:
-            obs_var = nc_file[netcdf_observation_varname]
-            if ("valid_min" in obs_var.__dict__ and hasattr(obs_var.valid_min, '__len__') and obs_var.valid_min[-1] == "f"):
-                self.logger.warning("Observation file has wrong valid_min (not parseable as float...). Trying to fix")
-                obs_var.valid_min = obs_var.valid_min[:-1]
+        # Try 10 times if another process has the file open already
+        for i in range(10):
+            try:
+                with Dataset(filename, mode='r+') as nc_file:
+                    obs_var = nc_file[netcdf_observation_varname]
+                    if ("valid_min" in obs_var.__dict__ and hasattr(obs_var.valid_min, '__len__') and obs_var.valid_min[-1] == "f"):
+                        self.logger.warning("Observation file has wrong valid_min (not parseable as float...). Trying to fix")
+                        obs_var.valid_min = obs_var.valid_min[:-1]
+            except:
+                time.sleep(10)
+            else:
+                break
 
         # Get actual data
         with Dataset(filename, mode='r') as nc_file:
