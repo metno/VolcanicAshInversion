@@ -126,7 +126,7 @@ def plotAshInv(json_data,
                 fig_width=6,
                 fig_height=4,
                 vmax=None,
-                r_vmax = 2.0,
+                r_vmax=2.0,
                 **kwargs):
 
     def npTimeToDatetime(np_time):

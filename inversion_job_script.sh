@@ -132,7 +132,7 @@ for SOLVER in "${SOLVERS[@]}"; do
                     --output_dir "$RUN_RESULTS_DIR"
 
     #Remove progress file
-    inv_exec rm "$RUN_DIR/progress.npz"
+    inv_exec rm -f "$RUN_DIR/progress.npz"
 
     #Symlink system matrix for subsequent runs.
     if [ ! -e $SYSTEM_MATRIX_FILE ]; then

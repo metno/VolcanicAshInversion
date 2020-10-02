@@ -67,6 +67,7 @@ set -e #Stop on first error
 export SCRIPT_DIR="@SCRIPT_DIR@"
 export RUN_DIR="@RUN_DIR@"
 export TAG="@TAG@"
+export RANDOM_SEED="@RANDOM_SEED@"
 
 export RUN_PLUME_HEIGHTS="@RUN_DIR@/plume_heights_@TAG@.csv"
 export RUN_CONF_A_PRIORI="@RUN_DIR@/conf_a_priori_@TAG@.ini"

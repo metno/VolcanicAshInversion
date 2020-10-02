@@ -381,7 +381,7 @@ class AshInversion():
                 obs_flag = nc_file['obs_flag'][:]
 
                 if (use_elevations):
-                    obs_alt = nc_file['obs_alt'][:,:]*1000 #FIXME: Given in KM
+                    obs_alt = nc_file['obs_alt'][:]*1000 #FIXME: Given in KM
 
                 #Read simulation data from disk
                 sim = nc_file['sim'][:,:,:]
@@ -417,91 +417,41 @@ class AshInversion():
             timers['start']['asm'] = time.time()
             max_i_width = 0
             for o in range(n_obs):
-                #Set up fo rusing ash cloud top observatoins
-                altitude_max = row.num_altitudes
-                if (use_elevations):
-                    altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o])+1)
-
-
+                #Set observation and uncertainty of observation
                 self.y_0[obs_counter] = obs[o]*scale_observation
-                #FIXME Birthe uses constant standard deviation here.
-                sigma_o = obs[o]*scale_observation*1.0
-                if (self.y_0[obs_counter] > obs_zero):
-                    self.sigma_o[obs_counter] = np.sqrt(sigma_o**2 + obs_model_error**2 + obs_min_error**2)
-                else:
-                    #Increase error for zero observations
-                    self.sigma_o[obs_counter] = np.sqrt(sigma_o**2 + obs_model_error**2 + obs_min_error**2*obs_zero_error_scale**2)
+                current_obs_min_error = obs_min_error if (self.y_0[obs_counter] < obs_zero) else obs_min_error*obs_zero_error_scale
+                current_sigma_o = obs[o]*scale_observation*1.0 #FIXME: constant uncertainty
+                self.sigma_o[obs_counter] = np.sqrt(current_sigma_o**2 + obs_model_error**2 + current_obs_min_error**2)
 
-
-                #Find valid values and indices
-                #Valid = not masked index && value > 0 && not masked
-                timers['start']['asm0'] += time.time()
-                vals = sim[o, :, :altitude_max].ravel(order='C')
-                indices = self.ordering_index[:altitude_max, time_index].transpose().ravel(order='C')
-                valid_vals = np.flatnonzero(indices >= 0)
-                valid_vals = valid_vals[vals[valid_vals] > 1.0e-15]
-
-                vals = vals[valid_vals]*scale_emission
-                indices = indices[valid_vals]
-                timers['end']['asm0'] += time.time()
-
-                if (indices.size > 0):
-                    #Compute matrix product Q = M^T sigma_o^-2 M without storing M
-                    #Uses clever (basic) indexing to avoid superfluous copying of data
-                    timers['start']['asm1'] += time.time()
-                    i_min = indices.min()
-                    i_max = indices.max()+1
-                    max_i_width = max(i_max-i_min-1, max_i_width)
-                    v = np.zeros(i_max - i_min)
-                    v[indices-i_min] = vals
-                    V = np.outer(v/(self.sigma_o[obs_counter]**2), v)
-                    timers['end']['asm1'] += time.time()
-                    timers['start']['asm2'] += time.time()
-                    Q_c[i_min:i_max, i_min:i_max] += V
-                    timers['end']['asm2'] += time.time()
-
-                    #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                    B_c[i_min:i_max] += v*(self.y_0[obs_counter] - np.dot(v, self.x_a[i_min:i_max])) / (self.sigma_o[obs_counter]**2)
-
-                    if (store_full_matrix):
-                        timers['start']['asm3'] += time.time()
-                        nnz_next = nnz_counter+vals.size
-                        M_indices[nnz_counter:nnz_next] = indices
-                        M_data[nnz_counter:nnz_next] = vals
-                        M_indptr[obs_counter+1] = vals.size
-                        nnz_counter = nnz_next
-                        timers['end']['asm3'] += time.time()
-
-                obs_counter = obs_counter+1
-
-
-                #This part implements top of ash cloud observation into the system
-                #by adding a zero-observation for the altitudes above the ash cloud
+                #Add observation of ash cloud top (zero ash above top of cloud)
+                altitude_ranges = [slice(0, row.num_altitudes)]
                 if (use_elevations):
-                    #FIXME What should the standard deviation be here?
-                    self.y_0[obs_counter] = 0.0 #Zero oserved ash here
-                    sigma_o = 0.0
-                    if (self.y_0[obs_counter] > obs_zero):
-                        self.sigma_o[obs_counter] = np.sqrt(sigma_o**2 + obs_model_error**2 + obs_min_error**2)
-                    else:
-                        #Increase error for zero observations
-                        self.sigma_o[obs_counter] = np.sqrt(sigma_o**2 + obs_model_error**2 + obs_min_error**2*obs_zero_error_scale**2)
+                    #Make a duplicate observation at same lat lon, but with zero above the given altitude
+                    self.y_0[obs_counter+1] = 0
+                    self.sigma_o[obs_counter+1] = np.sqrt(obs_model_error**2 + (obs_min_error*obs_zero_error_scale)**2)
+                    altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o])+1)
+                    altitude_ranges = [slice(0, altitude_max), slice(altitude_max, row.num_altitudes)]
 
+                for altitude_range in altitude_ranges:
                     #Find valid values and indices
                     #Valid = not masked index && value > 0 && not masked
-                    vals = sim[o, :, altitude_max:].ravel(order='C')
-                    indices = self.ordering_index[altitude_max:, time_index].transpose().ravel(order='C')
-                    valid_vals = np.flatnonzero(np.logical_and(indices >= 0, np.logical_and(vals > 1.0e-15, not np.ma.is_masked(vals))))
+                    timers['start']['asm0'] += time.time()
+                    vals = sim[o, :, altitude_range].ravel(order='C')
+                    indices = self.ordering_index[altitude_range, time_index].transpose().ravel(order='C')
+                    valid_vals = np.flatnonzero(indices >= 0)
+                    valid_vals = valid_vals[vals[valid_vals] > 0.0]
 
                     vals = vals[valid_vals]*scale_emission
                     indices = indices[valid_vals]
+                    timers['end']['asm0'] += time.time()
 
-                    #Compute matrix product Q = M^T sigma_o^-2 M without storing M
-                    #Uses clever (basic) indexing to avoid superfluous copying of data
                     if (indices.size > 0):
+                        #Compute matrix product Q = M^T sigma_o^-2 M without storing M
+                        #Uses clever (basic) indexing to avoid superfluous copying of data
                         timers['start']['asm1'] += time.time()
                         i_min = indices.min()
                         i_max = indices.max()+1
+                        max_i_width = max(i_max-i_min-1, max_i_width)
                         v = np.zeros(i_max - i_min)
                         v[indices-i_min] = vals
                         V = np.outer(v/(self.sigma_o[obs_counter]**2), v)
@@ -523,7 +473,6 @@ class AshInversion():
                             timers['end']['asm3'] += time.time()
 
                     obs_counter = obs_counter+1
-
 
 
             #Increase accuracy by grouping additions
@@ -597,7 +546,6 @@ class AshInversion():
                 logstr += ["{:s}={:.1f} s".format(key, timers['end'][key] - timers['start'][key])]
             logstr += ["width={:d}".format(max_i_width)]
             self.logger.info(", ".join(logstr))
-
 
 
         #Finally resize matrix to match actually used observations

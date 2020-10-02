@@ -765,6 +765,8 @@ if __name__ == "__main__":
                         help="Observations less than this treated as zero")
     parser.add("--dummy_observation_json", type=str,
                         help="JSON-file used to generate dummy observation", default=None)
+    parser.add("--random_seed", type=int,
+                        help="Random seed (to make run reproducible)", default=0)
     args = parser.parse_args()
 
     print("Arguments: ")
@@ -775,6 +777,8 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
+
+    np.random.seed(seed=args.random_seed)
 
     match = MatchFiles(emep_runs=args.simulation_csv,
                    satellite_observations=args.observation_csv,

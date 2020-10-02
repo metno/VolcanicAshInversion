@@ -22,13 +22,13 @@
 #                                                                            #
 ##############################################################################
 
-if [[ $_ == $0 ]]; then
+if [[ "$_" == "$0" ]]; then
     echo "ERROR: Script is a subshell."
     echo "INFO: Execute 'source ${BASH_SOURCE[0]}' instead"
     exit -1
 fi
 
-if [ $CONDA_INITIALIZED == 1 ]; then
+if [ "$CONDA_INITIALIZED" == "1" ]; then
     echo "Conda already initialized"
 else
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
