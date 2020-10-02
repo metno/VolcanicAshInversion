@@ -358,16 +358,16 @@ class AshInversion():
                 unit = nc_file['time'].units
                 times = netCDF4.num2date(nc_file['time'][:], units = unit).astype('datetime64[ns]')
                 #time_index = np.flatnonzero(np.isin(self.emission_times, time))
-                time_index = np.full(times.shape, -1, dtype=np.int32)
+                time_index = []
                 for i, t in enumerate(times):
                     ix = np.flatnonzero(self.emission_times == t)
                     if (len(ix) == 0):
                         self.logger.debug("Time {:s} from {:s} does not match up with a priori emission!".format(str(t), filename))
                     elif (len(ix) == 1):
-                        time_index[i] = ix
+                        time_index += [ix]
                     else:
                         self.logger.warning("Time {:s} exists multiple times in a priori - using first!".format(str(t)))
-                        time_index[i] = ix[0]
+                        time_index = [ix[0]]
 
                 if (self.args['verbose'] > 70):
                     self.logger.debug("File times: {:s}, \na priori times: {:s}, \nindices: {:s}".format(str(times), str(self.emission_times), str(time_index)))
