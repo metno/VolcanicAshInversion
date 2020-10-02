@@ -86,8 +86,8 @@ def aPrioriFromPlumeHeights(args,
 
     #a_priori_2d[:,:] = a_priori_2d[:,:]*2.0
     #a_priori_2d = a_priori_2d * (1.0 + 0.25 * (np.random.random(a_priori_2d.shape) - 0.5))
-    a_priori_2d[:8,:] *= 0.25
-    a_priori_2d[8:,:] *= 2.0
+    #a_priori_2d[:8,:] *= 0.25
+    #a_priori_2d[8:,:] *= 2.0
 
     # Return a priori data
     return {

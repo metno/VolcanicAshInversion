@@ -481,20 +481,20 @@ class AshInversion():
             last_row = row_index+1 == matched_files_df.shape[0]
             if ((sum_counter > 1.0e5) or last_row):
                 if  not last_row:
-                    valid_Q = self.Q > 0.0
+                    valid_Q = (self.Q != 0.0)
                     if (np.sum(valid_Q) > 0):
-                        valid_Q = np.logical_and(Q_c > 0.0, valid_Q, (Q_c / self.Q) > 1.0e-5)
+                        valid_Q = np.logical_and(Q_c != 0.0, valid_Q, np.nan_to_num(Q_c / self.Q) > 1.0e-5)
                     else:
                         valid_Q = Q_c > 0.0
 
-                    valid_B = self.B > 0.0
+                    valid_B = self.B != 0.0
                     if (np.sum(valid_B) > 0):
-                        valid_B = np.logical_and(B_c > 0.0, valid_B, (B_c / self.B) > 1.0e-5)
+                        valid_B = np.logical_and(B_c != 0.0, valid_B, np.nan_to_num(B_c / self.B) > 1.0e-5)
                     else:
-                        valid_B = B_c > 0.0
+                        valid_B = (B_c != 0.0)
                 else:
-                    valid_Q = Q_c > 0.0
-                    valid_B = B_c > 0.0
+                    valid_Q = (Q_c != 0.0)
+                    valid_B = (B_c != 0.0)
 
                 num_valid_Q = np.sum(valid_Q)
                 num_valid_B = np.sum(valid_B)
