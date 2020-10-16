@@ -951,9 +951,6 @@ if __name__ == '__main__':
     if (args.input_unscaled is not None):
         print("Loading existing matrices from {:s}".format(args.input_unscaled))
         ash_inv.load_matrices(args.input_unscaled)
-
-        #Recompute the a x_a a priori etc.
-        ash_inv.make_a_priori(args.a_priori_file)
     else:
         print("Creating new system matrices from {:s}".format(args.matched_files))
         unscaled_file = output_basename + "_system_matrix.npz"

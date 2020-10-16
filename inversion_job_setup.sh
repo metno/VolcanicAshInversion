@@ -46,7 +46,7 @@ QUEUE=${QUEUE:-NONE}       #qsub queue to submit to
 PROJECT=${PROJECT:-NONE}   #qsub project to use
 RUNTIME=${RUNTIME:-1:30:0} #qsub max job run time
 MEMORY=${MEMORY:-1G}       #qsub memory to use
-PARALLEL_ENVIRONMENT=${PARALLEL_ENVIRONMENT:NONE} #qsub PE to use
+PARALLEL_ENVIRONMENT=${PARALLEL_ENVIRONMENT:-NONE} #qsub PE to use
 SUBMIT=${SUBMIT:-0}
 RANDOM_SEED=$(date +"%s")
 
