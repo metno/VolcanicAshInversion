@@ -49,7 +49,7 @@ def makePlotFromJson(json_filename, outfile, **kwargs):
         fig.savefig(outfile)
 
 
-def readJson(json_filename, prune=True):
+def readJson(json_filename, prune=True, prune_zero=0):
     #Read data
     with open(json_filename, 'r') as infile:
         json_string = infile.read()
@@ -75,21 +75,21 @@ def readJson(json_filename, prune=True):
 
     json_data["run_date"] = np.array(json_data["run_date"], dtype='datetime64[ns]')
 
-    #Prune unused a priori times
-    if (prune):
-        valid_times = np.flatnonzero(np.sum(json_data["ordering_index"] >= 0, axis=0))
-        json_data["ordering_index"] = json_data["ordering_index"][:,valid_times.min():valid_times.max()+1]
-        json_data["emission_times"] = json_data["emission_times"][valid_times.min():valid_times.max()+1]
-
     #Make JSON-data into 2d matrix
     json_data["a_posteriori"] = expandVariable(json_data["emission_times"], json_data["level_heights"], json_data["ordering_index"], json_data["a_posteriori"])
     json_data["a_priori"] = expandVariable(json_data["emission_times"], json_data["level_heights"], json_data["ordering_index"], json_data["a_priori"])
 
-    #Prune any unused a priori elevations
+    #Prune any unused a priori elevations and timesteps
     if (prune):
-        valid_elevations = max(np.flatnonzero((json_data['a_priori'].sum(axis=1) + json_data['a_posteriori'].sum(axis=1)) > 0)) + 1
-        json_data['a_priori'] = json_data['a_priori'][:valid_elevations,:]
-        json_data['a_posteriori'] = json_data['a_posteriori'][:valid_elevations,:]
+        valid_elevations = max(np.flatnonzero((json_data['a_priori'].max(axis=1) + json_data['a_posteriori'].max(axis=1)) > prune_zero)) + 1
+        valid_times = np.flatnonzero((json_data['a_priori'].max(axis=0) + json_data['a_posteriori'].max(axis=0)) > prune_zero)
+        valid_times_min = min(valid_times)
+        valid_times_max = max(valid_times) + 1
+
+        json_data['a_priori'] = json_data['a_priori'][:valid_elevations,valid_times_min:valid_times_max]
+        json_data['a_posteriori'] = json_data['a_posteriori'][:valid_elevations,valid_times_min:valid_times_max]
+        json_data["ordering_index"] = json_data["ordering_index"][:valid_elevations,valid_times_min:valid_times_max]
+        json_data["emission_times"] = json_data["emission_times"][valid_times_min:valid_times_max]
         json_data["level_heights"] = json_data['level_heights'][:valid_elevations]
 
     return json_data
