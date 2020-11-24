@@ -277,7 +277,10 @@ def plotAshInv(json_data,
 
 
 
-def plotAshInvMatrix(matrix, fig=None, downsample=True):
+
+def downsample(arr, target, rebin_type='median'):
+    """ Resizes an image to something close to target """
+
     def prime_factors(n):
         """ Finds prime factors of n  """
         i = 2
@@ -303,37 +306,27 @@ def plotAshInvMatrix(matrix, fig=None, downsample=True):
                 break
         return factor
 
-    def rebin(arr, new_shape):
+    def rebin(arr, new_shape, rebin_type):
         """Rebin 2D array arr to shape new_shape by averaging."""
         if (new_shape[0] < arr.shape[0] or new_shape[1] < arr.shape[1]):
             shape = (new_shape[0], arr.shape[0] // new_shape[0],
                     new_shape[1], arr.shape[1] // new_shape[1])
-            return arr.reshape(shape).mean(-1).mean(1)
+            if (rebin_type == 'mean'):
+                return arr.reshape(shape).mean(-1).mean(1)
+            elif (rebin_type == 'median'):
+                return np.median(np.median(arr.reshape(shape), axis=-1), axis=1)
+            elif (rebin_type == 'max'):
+                return arr.reshape(shape).max(-1).max(1)
+            elif (rebin_type == 'min'):
+                return arr.reshape(shape).min(-1).min(1)
         else:
             return arr
 
-    def downsample(arr, target):
-        """ Resizes an image to something close to target """
-        downsample_factor = [find_downsample_factor(s, t) for s, t in zip(arr.shape, target)]
-        out = None
-        try:
-            target_size = [s // t for s, t in zip(arr.shape, downsample_factor)]
-            if (scipy.sparse.issparse(arr)):
-                out = rebin(arr.toarray(), target_size)
-            else:
-                out = rebin(arr, target_size)
-        except Exception as e:
-            try:
-                out = arr[::downsample_factor[0], ::downsample_factor[1]]
-
-                if (scipy.sparse.issparse(out)):
-                    out = out.toarray()
-            except MemoryError as e:
-                pass
-
-        return out
+    target_size = [s // find_downsample_factor(s, t) for s, t in zip(arr.shape, target)]
+    return rebin(arr, target_size, rebin_type)
 
 
+def plotAshInvMatrix(matrix, fig=None, downsample=True, rebin_type='median'):
     if (fig is None):
         fig = plt.figure(figsize=(18, 18))
 
@@ -346,7 +339,7 @@ def plotAshInvMatrix(matrix, fig=None, downsample=True):
 
     m = matrix
     if (downsample):
-        m = downsample(matrix, fig_size)
+        m = downsample(matrix, fig_size, rebin_type)
 
     #For plotting, force negative numbers to zero
     m[m<0] = 0.0
