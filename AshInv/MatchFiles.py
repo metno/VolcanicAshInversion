@@ -49,6 +49,11 @@ class MatchFiles:
         self.sim_files = pd.read_csv(emep_runs, parse_dates=[0], comment='#')
         self.obs_files = pd.read_csv(satellite_observations, parse_dates=[0], comment='#')
 
+        #Remove timezone information
+        self.logger.warning("Converting times from CSV files to UTC")
+        self.sim_files['date'] = self.sim_files['date'].dt.tz_convert(None)
+        self.obs_files['date'] = self.obs_files['date'].dt.tz_convert(None)
+
         #Set path to be relative to csv file (if it does not exist already in relative path)
         if (emep_runs_basedir is not None):
             self.sim_files.filename = self.sim_files.filename.apply(lambda x: os.path.join(emep_runs_basedir, x))
@@ -71,7 +76,8 @@ class MatchFiles:
                     obs_flag_max=1.95,
                     zero_thinning=0.7,
                     obs_zero=1.0e-20,
-                    dummy_observation_json=None):
+                    dummy_observation_json=None,
+                    fix_broken_netcdf_files=False):
         """
         Loops through all observation files, and tries to match observation with simulations
 
@@ -93,23 +99,36 @@ class MatchFiles:
         os.makedirs(output_dir, exist_ok=True)
 
         #Get first and last timestep in each simulation netcdf file to speed up processing
-        for sim_file in self.sim_files.itertuples():
-            with Dataset(sim_file.filename) as nc_file:
+        def getNCTimes(row):
+            try:
+                nc_file = Dataset(row['filename'])
+
                 sim_time = nc_file['time'][:]
                 unit = nc_file['time'].units
                 sim_time = num2date(sim_time, units = unit, only_use_cftime_datetimes=False, only_use_python_datetimes=True)
+            except:
+                raise RuntimeError("Invalid timezone info in {:s}".format(row['filename']))
+            else:
+                nc_file.close()
 
-                #Raise error if timezone supplied in NetCDF file
-                #FIXME: perform automatic conversion
-                for i in range(len(sim_time)):
-                    if (sim_time[i].tzinfo is not None and sim_time[i].tzinfo is not datetime.timezone.utc):
-                        raise RuntimeError("Invalid timezone info in {:s}".format(sim_file.filename))
-                    else:
-                        sim_time[i] = pd.Timestamp(sim_time[i], tz='utc')
+            #Raise error if timezone supplied in NetCDF file
+            for i in range(len(sim_time)):
+                if (sim_time[i].tzinfo is not None and sim_time[i].tzinfo is not datetime.timezone.utc):
+                    raise RuntimeError("Invalid timezone info in {:s}".format(row['filename']))
+                else:
+                    #Remove timezone info
+                    sim_time[i].replace(tzinfo=None)
 
-                #num2date does not care about timezones, we assume given as UTC
-                self.sim_files.at[sim_file.Index, "first_ts"] = sim_time.min()
-                self.sim_files.at[sim_file.Index, "last_ts"] = sim_time.max()
+            #Find minimum and maximum time
+            min_time = sim_time[0]
+            max_time = sim_time[0]
+            for t in sim_time[1:]:
+                min_time = min(min_time, t)
+                max_time = max(max_time, t)
+
+            return min_time, max_time
+
+        self.sim_files['first_ts'], self.sim_files['last_ts'] = zip(*self.sim_files.apply(getNCTimes, axis=1))
 
         #Prune observation files that clearly do not match up
         valid_obs_files = np.empty(self.obs_files.shape[0], dtype=np.bool)
@@ -153,7 +172,7 @@ class MatchFiles:
             if (dummy_observation_json is not None):
                 obs_lon, obs_lat, obs, obs_alt, obs_flag = self.make_dummy_observation_data(obs_file.date, dummy_observation_json)
             else:
-                obs_lon, obs_lat, obs, obs_alt, obs_flag = self.read_observation_data(obs_file.filename)
+                obs_lon, obs_lat, obs, obs_alt, obs_flag = self.read_observation_data(obs_file.filename, fix_broken_netcdf_files=fix_broken_netcdf_files)
 
             #Read simulation data
             try:
@@ -377,8 +396,8 @@ class MatchFiles:
             nc_var['lon'][:] = lon
             nc_var['lat'][:] = lat
 
-            epoch = pd.Timestamp(datetime.datetime(year=1970, month=1, day=1, hour=0, minute=0), tz='utc')
-            units = "days since " + epoch.strftime("%Y-%m-%d %H:%M")
+            epoch = np.datetime64('1970-01-01T00:00')
+            units = "days since 1970-01-01 00:00"
             nc_var['time'].units = units
             nc_var['time'][:] = [((t - epoch) / datetime.timedelta(days=1)) for t in sim_dates]
 
@@ -508,7 +527,8 @@ class MatchFiles:
     def read_observation_data(self, filename,
                  netcdf_observation_varnames=["AshMass", "ash_loading", "ash_concentration_col"],
                  netcdf_observation_altitude_varnames=["AshHeight"],
-                 netcdf_observation_error_varnames=["AshFlag", "AF", "ash_flag"]):
+                 netcdf_observation_error_varnames=["AshFlag", "AF", "ash_flag"],
+                 fix_broken_netcdf_files=False):
         """
         Reads the observation and observation flag from the NetCDF file
 
@@ -566,17 +586,19 @@ class MatchFiles:
 
         # Fix improper valid_min
         # Try 10 times if another process has the file open already
-        for i in range(10):
-            try:
-                with Dataset(filename, mode='r+') as nc_file:
-                    obs_var = nc_file[netcdf_observation_varname]
-                    if ("valid_min" in obs_var.__dict__ and hasattr(obs_var.valid_min, '__len__') and obs_var.valid_min[-1] == "f"):
-                        self.logger.warning("Observation file has wrong valid_min (not parseable as float...). Trying to fix")
-                        obs_var.valid_min = obs_var.valid_min[:-1]
-            except:
-                time.sleep(10)
-            else:
-                break
+        if (fix_broken_netcdf_files):
+            for i in range(10):
+                try:
+                    with Dataset(filename, mode='r+') as nc_file:
+                        obs_var = nc_file[netcdf_observation_varname]
+                        if ("valid_min" in obs_var.__dict__ and hasattr(obs_var.valid_min, '__len__') and obs_var.valid_min[-1] == "f"):
+                            self.logger.warning("Observation file has wrong valid_min (not parseable as float...). Trying to fix")
+                            obs_var.valid_min = obs_var.valid_min[:-1]
+                except:
+                    time.sleep(10)
+                else:
+                    break
+
 
         # Get actual data
         with Dataset(filename, mode='r') as nc_file:
@@ -694,22 +716,23 @@ class MatchFiles:
                 #Find timestep closest to observation
                 sim_time = nc_file['time'][:]
                 unit = nc_file['time'].units
-                sim_time = num2date(sim_time, units = unit, only_use_cftime_datetimes=False, only_use_python_datetimes=True)
+                sim_time = num2date(sim_time, units=unit, only_use_cftime_datetimes=False, only_use_python_datetimes=True)
+
                 for i in range(len(sim_time)):
                     if (sim_time[i].tzinfo is not None and sim_time[i].tzinfo is not datetime.timezone.utc):
                         raise RuntimeError("Invalid timezone info in {:s}".format(filename))
                     else:
-                        sim_time[i] = pd.Timestamp(sim_time[i], tz='utc')
-
+                        #Remove timezone info and convert to numpy time
+                        sim_time[i].replace(tzinfo=None)
+                sim_time = sim_time.astype(np.datetime64)
 
                 #FIXME: hour is defined as :30 (average), hourInst as :00. Which to choose here?
-                timestep = np.argmin(np.abs(sim_time - np.array(obs_time)))
-
+                timestep = np.argmin(np.abs(sim_time - np.array(obs_time, dtype=np.datetime64)))
 
                 if (self.verbose):
                     self.logger.debug("Observation time {:s}, matching emission time: {:s} ({:s}, timestep {:d} - {:s})".format(str(obs_time), str(emission_time), filename, timestep, str(sim_time[timestep])))
                 #FIXME: What is a reasonable delta here?
-                if (np.abs(sim_time[timestep] - obs_time) > datetime.timedelta(minutes=30)):
+                if (np.abs(sim_time[timestep] - np.array(obs_time, dtype=np.datetime64)) > datetime.timedelta(minutes=30)):
                     self.logger.error("No matching timestep for observation in {:s} (obs time={:s})!".format(filename, str(obs_time)))
                     continue
 
@@ -728,7 +751,6 @@ class MatchFiles:
                 if (n_levels_read != n_levels):
                     if (self.verbose):
                         self.logger.warning("Number of expected ({:d}) and found ({:d}) levels did not match!".format(n_levels, n_levels_read))
-
 
         date = self.sim_files.date[valid_sim_files]
         return lon, lat, date, data
@@ -765,6 +787,8 @@ if __name__ == "__main__":
                         help="Observations less than this treated as zero")
     parser.add("--dummy_observation_json", type=str,
                         help="JSON-file used to generate dummy observation", default=None)
+    parser.add("--fix_broken_netcdf_files", type=str,
+                        help="Fix (by overwriting) broken netcdf files.", default=False)
     parser.add("--random_seed", type=int,
                         help="Random seed (to make run reproducible)", default=0)
     args = parser.parse_args()
@@ -790,4 +814,5 @@ if __name__ == "__main__":
                       obs_flag_max=args.obs_flag_max,
                       zero_thinning=args.zero_thinning,
                       obs_zero=args.obs_zero,
-                      dummy_observation_json=args.dummy_observation_json)
+                      dummy_observation_json=args.dummy_observation_json,
+                      fix_broken_netcdf_files=args.fix_broken_netcdf_files)
