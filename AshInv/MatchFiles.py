@@ -482,11 +482,10 @@ class MatchFiles:
 
         #Loop over all files
         for timestep in timesteps:
-            t_index = timesteps[timestep]
-            if (t_index < 0):
+            if (timestep < 0):
                 continue
 
-            filename = self.sim_files.filename[t_index]
+            filename = self.sim_files.filename[timestep]
 
             with Dataset(filename) as nc_file:
                 #Read lat and lon
