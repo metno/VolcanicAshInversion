@@ -38,15 +38,18 @@ import os
 
 
 
-def makePlotFromJson(json_filename, outfile, **kwargs):
+def makePlotFromJson(json_filename, outfile=None, **kwargs):
     json_data = readJson(json_filename)
     fig = plotAshInv(json_data, **kwargs)
 
-    basename, ext = os.path.splitext(os.path.abspath(json_filename))
-    if (ext == 'pdf'):
-        saveFig(outfile, fig, json_data["meta"])
-    else:
-        fig.savefig(outfile)
+    if (outfile is not None):
+        basename, ext = os.path.splitext(os.path.abspath(json_filename))
+        if (ext == 'pdf'):
+            saveFig(outfile, fig, json_data["meta"])
+        else:
+            fig.savefig(outfile)
+
+    return fig
 
 
 def readJson(json_filename, prune=True, prune_zero=0):
@@ -130,7 +133,7 @@ def plotAshInv(json_data,
                 **kwargs):
 
     def npTimeToDatetime(np_time):
-        return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's'))
+        return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00')) / np.timedelta64(1, 's'))
 
     def npTimeToStr(np_time, fmt="%Y-%m-%d %H:%M"):
         return npTimeToDatetime(np_time).strftime(fmt)
