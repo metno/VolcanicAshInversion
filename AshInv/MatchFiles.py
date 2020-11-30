@@ -786,8 +786,8 @@ if __name__ == "__main__":
                         help="Observations less than this treated as zero")
     parser.add("--dummy_observation_json", type=str,
                         help="JSON-file used to generate dummy observation", default=None)
-    parser.add("--fix_broken_netcdf_files", type=str,
-                        help="Fix (by overwriting) broken netcdf files.", default=False)
+    parser.add("--fix_broken_netcdf_files", action="store_true",
+                        help="Fix (by overwriting) broken netcdf files.")
     parser.add("--random_seed", type=int,
                         help="Random seed (to make run reproducible)", default=0)
     args = parser.parse_args()
