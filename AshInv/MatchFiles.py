@@ -236,7 +236,7 @@ class MatchFiles:
                     obs_lat = obs_lat[keep]
             self.logger.info("Added {:d} observations ({:.2f} % zeros). Ignored {:d} uncertain, and {:d}/{:d} zeroes".format(
                 obs.size,
-                100*(n_total_zero-n_remove_zero)/obs.size,
+                100*(n_total_zero-n_remove_zero)/max(1, obs.size),
                 n_remove_af,
                 n_remove_zero,
                 n_total_zero))
@@ -254,7 +254,7 @@ class MatchFiles:
 
             #Update CSV-file
             self.obs_files.to_csv(matched_out_csv, index=False)
-        self.logger.info("Added a total of {:d} observations ({:.2f} % zeros)".format(num_obs, 100*num_zero_obs/num_obs))
+        self.logger.info("Added a total of {:d} observations ({:.2f} % zeros)".format(num_obs, 100*num_zero_obs/max(1, num_obs)))
 
 
 
