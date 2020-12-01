@@ -142,7 +142,7 @@ class MatchFiles:
         if (np.count_nonzero(valid_obs_files) < self.obs_files.shape[0]):
             self.logger.info("Removing {:d}/{:d} non-matching observation files".format(self.obs_files.shape[0]-np.count_nonzero(valid_obs_files), self.obs_files.shape[0]))
         self.obs_files = self.obs_files.iloc[valid_obs_files]
-        self.obs_files.reset_index(drop=True)
+        self.obs_files.reset_index(drop=True, inplace=True)
 
         #Add extra columns to files to speed up processing in inversion
         self.obs_files["matched_file"] = None
@@ -157,9 +157,11 @@ class MatchFiles:
             processed_obs_files = pd.read_csv(matched_out_csv, parse_dates=[0])
             self.obs_files = pd.concat([self.obs_files, processed_obs_files])
             self.obs_files = self.obs_files.drop_duplicates('filename', keep='last')
-            self.obs_files.reset_index(drop=True)
+            self.obs_files.reset_index(drop=True, inplace=True)
 
         #Loop over observation files (outer loop)
+        num_obs = 0
+        num_zero_obs = 0
         for obs_file in self.obs_files.itertuples():
             out_filename = os.path.splitext(os.path.basename(obs_file.filename))[0] + "_matched.nc"
             self.logger.info("Creating {:d}/{:d} - {:s}".format(obs_file.Index+1, self.obs_files.shape[0], out_filename))
@@ -232,11 +234,14 @@ class MatchFiles:
                     sim = sim[keep, :, :]
                     obs_lon = obs_lon[keep]
                     obs_lat = obs_lat[keep]
-            self.logger.info("Added {:d} observations (removed {:d} uncertain, and {:d}/{:d} zeroes)".format(
+            self.logger.info("Added {:d} observations ({:.2f} % zeros). Ignored {:d} uncertain, and {:d}/{:d} zeroes".format(
                 obs.size,
+                100*(n_total_zero-n_remove_zero)/obs.size,
                 n_remove_af,
                 n_remove_zero,
                 n_total_zero))
+            num_obs += obs.size
+            num_zero_obs += n_total_zero-n_remove_zero
 
             #Write to file
             self.write_matched_data(obs_lon, obs_lat, obs, obs_alt, obs_flag, obs_file.date, sim, sim_date, os.path.join(output_dir, out_filename))
@@ -249,6 +254,7 @@ class MatchFiles:
 
             #Update CSV-file
             self.obs_files.to_csv(matched_out_csv, index=False)
+        self.logger.info("Added a total of {:d} observations ({:.2f} % zeros)".format(num_obs, 100*num_zero_obs/num_obs))
 
 
 
@@ -610,12 +616,16 @@ class MatchFiles:
             else:
                 raise RuntimeError("No supported spatial dimension")
 
-            obs = nc_file[netcdf_observation_varname][:,:]
-            if (netcdf_observation_altitude_varname is not None):
-                obs_alt = nc_file[netcdf_observation_altitude_varname][:,:]
-            else:
-                obs_alt = None
-            obs_flag = nc_file[netcdf_observation_error_varname][:,:]
+            try:
+                obs = nc_file[netcdf_observation_varname][:,:]
+                if (netcdf_observation_altitude_varname is not None):
+                    obs_alt = nc_file[netcdf_observation_altitude_varname][:,:]
+                else:
+                    obs_alt = None
+                obs_flag = nc_file[netcdf_observation_error_varname][:,:]
+            except Exception as e:
+                self.logger.error("Error reading observations from {:s}, please check your NetCDF file".format(filename))
+                raise e
 
         #Possibly transpose observation
         if (obs.shape == (len(lon), len(lat))):
