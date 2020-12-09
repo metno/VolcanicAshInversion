@@ -27,7 +27,7 @@
 ####################
 
 ## Name of the job
-#$ -N "ashinv-@TAG@"
+#$ -N "@TAG@-ashinv"
 
 ## Resource use
 #$ -l h_rt=@RUNTIME@
