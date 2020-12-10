@@ -512,7 +512,8 @@ class MatchFiles:
                         obs = np.zeros_like(o)
                         obs_alt = np.zeros_like(o)
                     obs += o
-                    obs_alt[o > 0] = np.maximum(obs_alt[o > 0], level_altitudes[altitude] / 1000.0) #Altitude in km
+                    #Update altitude only if we have "certain ash" in this level
+                    obs_alt[o > 1.0e-5] = np.maximum(obs_alt[o > 1.0e-5], level_altitudes[altitude] / 1000.0) #Altitude in km
 
         obs = obs * 1.0e-6 #ug to g
 

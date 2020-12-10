@@ -429,15 +429,18 @@ class AshInversion():
                     #Make a duplicate observation at same lat lon, but with zero above the given altitude
                     self.y_0[obs_counter+1] = 0
                     self.sigma_o[obs_counter+1] = np.sqrt(obs_model_error**2 + (obs_min_error*obs_zero_error_scale)**2)
-                    altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o])+1)
+                    altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o]))
                     altitude_ranges = [slice(0, altitude_max), slice(altitude_max, row.num_altitudes)]
 
                 for altitude_range in altitude_ranges:
                     #Find valid values and indices
                     #Valid = not masked index && value > 0 && not masked
                     timers['start']['asm0'] += time.time()
-                    vals = sim[o, :, altitude_range].ravel(order='C')
+                    vals = sim[o, time_index, altitude_range].ravel(order='C')
                     indices = self.ordering_index[altitude_range, time_index].transpose().ravel(order='C')
+
+                    assert vals.shape == indices.shape
+
                     valid_vals = np.flatnonzero(indices >= 0)
                     valid_vals = valid_vals[vals[valid_vals] > 0.0]
 
