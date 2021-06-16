@@ -76,7 +76,9 @@ trap cleanup_job ERR EXIT KILL SIGTERM
 
 
 #Set python path
-export PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
+#export PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
+#if PYTHONPATH is empty do not add leading :
+export PYTHONPATH=${PYTHONPATH:+${PYTHONPATH}:}$SCRIPT_DIR
 
 echo ""
 echo ""
