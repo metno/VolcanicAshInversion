@@ -357,17 +357,18 @@ class AshInversion():
                 #Get the indices for the time which corresponds to the a-priori data
                 unit = nc_file['time'].units
                 times = netCDF4.num2date(nc_file['time'][:], units = unit).astype('datetime64[ns]')
-                #time_index = np.flatnonzero(np.isin(self.emission_times, time))
-                time_index = []
+                time_index = [[], []] #Two dimensional array [sim_time_index, emission_time_index]
                 for i, t in enumerate(times):
                     ix = np.flatnonzero(self.emission_times == t)
                     if (len(ix) == 0):
                         self.logger.debug("Time {:s} from {:s} does not match up with a priori emission!".format(str(t), filename))
                     elif (len(ix) == 1):
-                        time_index += [ix]
+                        time_index[0] += [i]
+                        time_index[1] += [ix]
                     else:
                         self.logger.warning("Time {:s} exists multiple times in a priori - using first!".format(str(t)))
-                        time_index = [ix[0]]
+                        time_index[0] += [i]
+                        time_index[1] += [ix[0]]
 
                 if (self.args['verbose'] > 70):
                     self.logger.debug("File times: {:s}, \na priori times: {:s}, \nindices: {:s}".format(str(times), str(self.emission_times), str(time_index)))
@@ -436,10 +437,10 @@ class AshInversion():
                     #Find valid values and indices
                     #Valid = not masked index && value > 0 && not masked
                     timers['start']['asm0'] += time.time()
-                    vals = sim[o, time_index, altitude_range].ravel(order='C')
-                    indices = self.ordering_index[altitude_range, time_index].transpose().ravel(order='C')
+                    vals = sim[o, time_index[0], altitude_range].ravel(order='C')
+                    indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
 
-                    assert vals.shape == indices.shape
+                    assert (vals.shape == indices.shape), "Number of values {:d} does not match up with number of indices {:d}".format(str(vals.shape), str(indices.shape))
 
                     valid_vals = np.flatnonzero(indices >= 0)
                     valid_vals = valid_vals[vals[valid_vals] > 0.0]
@@ -486,13 +487,17 @@ class AshInversion():
                 if  not last_row:
                     valid_Q = (self.Q != 0.0)
                     if (np.sum(valid_Q) > 0):
-                        valid_Q = np.logical_and(Q_c != 0.0, valid_Q, np.nan_to_num(Q_c / self.Q) > 1.0e-5)
+                        with np.errstate(divide='ignore', invalid='ignore'):
+                            # self.Q might be zero initially
+                            valid_Q = np.logical_and(Q_c != 0.0, valid_Q, np.nan_to_num(Q_c / self.Q) > 1.0e-5)
                     else:
                         valid_Q = Q_c > 0.0
 
                     valid_B = self.B != 0.0
                     if (np.sum(valid_B) > 0):
-                        valid_B = np.logical_and(B_c != 0.0, valid_B, np.nan_to_num(B_c / self.B) > 1.0e-5)
+                        with np.errstate(divide='ignore', invalid='ignore'):
+                            # self.B might be zero initially
+                            valid_B = np.logical_and(B_c != 0.0, valid_B, np.nan_to_num(B_c / self.B) > 1.0e-5)
                     else:
                         valid_B = (B_c != 0.0)
                 else:
@@ -544,7 +549,7 @@ class AshInversion():
             logstr += ["{:.1f} %".format(100*obs_counter/total_num_obs)]
             logstr += ["#obs={:d}".format(n_obs)]
             logstr += ["#obs/s={:.1f}".format(n_obs/(timers['end']['tot'] - timers['start']['tot']))]
-            logstr += ["mem={:.1f} GB".format(self.get_memory_usage_gb())]
+            logstr += ["mem={:.1f} GB".format(self.get_memory_usage_gb())]
             for key in timers['start'].keys():
                 logstr += ["{:s}={:.1f} s".format(key, timers['end'][key] - timers['start'][key])]
             logstr += ["width={:d}".format(max_i_width)]
@@ -608,7 +613,7 @@ class AshInversion():
 
         np.savez(outname, **data)
         toc = time.time()
-        self.logger.info("Wrote to disk in {:.0f} s".format(toc-tic))
+        self.logger.info("Wrote to disk in {:.0f} s".format(toc-tic))
 
 
 
@@ -868,7 +873,7 @@ if __name__ == '__main__':
     import sys
     parser = configargparse.ArgParser(description='Run iterative inversion algorithm.')
     parser.add("-c", "--config", is_config_file=True, help="config file which specifies options (commandline overrides)")
-    parser.add("-v", "--verbose", help="increase output verbosity", action="store_true")
+    parser.add("-v", "--verbose", help="Set output verbosity [0-100]", type=float, default=0)
 
     #Input arguments
     input_args = parser.add_argument_group('Input arguments')
