@@ -122,6 +122,22 @@ def degree_to_meters_WGS84(lat_degrees):
     lon_length = 111412.84*np.cos(phi) - 93.5*np.cos(3*phi) + 0.118*np.cos(5*phi)
 
     return lon_length, lat_length
+    
+def great_circle_distance_in_meters(lon1, lat1, lon2, lat2):
+    """
+    Calculates distance from (lon1, lat1) to (lon2, lat2)
+    Adapted from wikipedia
+    """
+    #Convert from lat lon decimal degrees to radians
+    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
+
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    d_sigma = 2* np.arcsin ( np.sqrt(np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2 ))
+
+    earth_radius_in_meters=6371137
+
+    return earth_radius_in_meters*d_sigma
 
 def get_grid_cell_size(latitude, longitude):
     """

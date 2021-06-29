@@ -34,6 +34,8 @@ import os
 import re
 import json
 
+from AshInv import Misc
+
 
 class MatchFiles:
     def __init__(self,
@@ -77,7 +79,10 @@ class MatchFiles:
                     zero_thinning=0.7,
                     obs_zero=1.0e-20,
                     dummy_observation_json=None,
-                    fix_broken_netcdf_files=False):
+                    fix_broken_netcdf_files=False,
+                    volcano_lat=None,
+                    volcano_lon=None,
+                    max_distance=None):
         """
         Loops through all observation files, and tries to match observation with simulations
 
@@ -174,7 +179,8 @@ class MatchFiles:
             if (dummy_observation_json is not None):
                 obs_lon, obs_lat, obs, obs_alt, obs_flag = self.make_dummy_observation_data(obs_file.date, dummy_observation_json)
             else:
-                obs_lon, obs_lat, obs, obs_alt, obs_flag = self.read_observation_data(obs_file.filename, fix_broken_netcdf_files=fix_broken_netcdf_files)
+                obs_lon, obs_lat, obs, obs_alt, obs_flag = self.read_observation_data(obs_file.filename, fix_broken_netcdf_files=fix_broken_netcdf_files, 
+                                                                                        volcano_lat=volcano_lat, volcano_lon=volcano_lon, max_distance=max_distance)
 
             #Read simulation data
             try:
@@ -234,9 +240,9 @@ class MatchFiles:
                     sim = sim[keep, :, :]
                     obs_lon = obs_lon[keep]
                     obs_lat = obs_lat[keep]
-            self.logger.info("Added {:d} observations ({:.2f} % zeros). Ignored {:d} uncertain, and {:d}/{:d} zeroes".format(
-                obs.size,
-                100*(n_total_zero-n_remove_zero)/max(1, obs.size),
+            self.logger.info("Added {:d} ash observations and {:d} no ash observations. Ignored {:d} uncertain, and {:d}/{:d} zeroes".format(
+                obs.size-(n_total_zero-n_remove_zero),
+                n_total_zero-n_remove_zero,
                 n_remove_af,
                 n_remove_zero,
                 n_total_zero))
@@ -534,7 +540,10 @@ class MatchFiles:
                  netcdf_observation_varnames=["AshMass", "ash_loading", "ash_concentration_col"],
                  netcdf_observation_altitude_varnames=["AshHeight"],
                  netcdf_observation_error_varnames=["AshFlag", "AF", "ash_flag"],
-                 fix_broken_netcdf_files=False):
+                 fix_broken_netcdf_files=False,
+                 volcano_lat=None, 
+                 volcano_lon=None, 
+                 max_distance=None):
         """
         Reads the observation and observation flag from the NetCDF file
 
@@ -627,6 +636,14 @@ class MatchFiles:
             except Exception as e:
                 self.logger.error("Error reading observations from {:s}, please check your NetCDF file".format(filename))
                 raise e
+
+        #Filter out distances that are too far away by marking them as 2 - uncertain
+        if (max_distance is not None):
+            m_lon, m_lat = np.meshgrid(lon, lat)
+            distances = Misc.great_circle_distance_in_meters(volcano_lon, volcano_lat, m_lon, m_lat)/1000
+            mask = distances > max_distance
+            self.logger.info("Filtering out {:d}/{:d} observations {:f} km from lon={:f} lat={:f}".format(np.sum(obs_flag[mask]<2), np.sum(obs_flag<2), max_distance, volcano_lon, volcano_lat))
+            obs_flag[mask] = 2
 
         #Possibly transpose observation
         if (obs.shape == (len(lon), len(lat))):
@@ -801,6 +818,17 @@ if __name__ == "__main__":
                         help="Fix (by overwriting) broken netcdf files.")
     parser.add("--random_seed", type=int,
                         help="Random seed (to make run reproducible)", default=0)
+    parser.add('--max_days', type=float,
+                        help="Maximum number of days between emission (simulation) and observation", default=6.0)
+    parser.add('--min_days', type=float,
+                        help="Minimum number of days between emission (simulation) and observation", default=0.0)
+    parser.add('--volcano_lat', type=float,
+                        help="Latitude of volcano (used as distance criteria)", default=None)
+    parser.add('--volcano_lon', type=float,
+                        help="Longitude of volcano (used as distance criteria)", default=None)
+    parser.add('--max_distance', type=float,
+                        help="Maximum distance from volcano to consider (in km)", default=None)
+
     args = parser.parse_args()
 
     print("Arguments: ")
@@ -825,4 +853,9 @@ if __name__ == "__main__":
                       zero_thinning=args.zero_thinning,
                       obs_zero=args.obs_zero,
                       dummy_observation_json=args.dummy_observation_json,
-                      fix_broken_netcdf_files=args.fix_broken_netcdf_files)
+                      fix_broken_netcdf_files=args.fix_broken_netcdf_files,
+                      max_days=args.max_days,
+                      min_days=args.min_days,
+                      volcano_lat=args.volcano_lat,
+                      volcano_lon=args.volcano_lon,
+                      max_distance=args.max_distance)

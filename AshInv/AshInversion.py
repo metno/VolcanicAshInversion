@@ -263,6 +263,7 @@ class AshInversion():
         matched_times = np.array(matched_files_df["date"], dtype='datetime64[ns]')
         remove = np.ones((self.level_heights.size, self.emission_times.size), dtype=np.bool)
         for t, emission_time in enumerate(self.emission_times):
+            #FIXME: These should correspond to the limits in MatchFiles.py
             min_days=0
             max_days=6
             deltas = (matched_times - emission_time) / np.timedelta64(1, 'D')
@@ -420,7 +421,7 @@ class AshInversion():
             for o in range(n_obs):
                 #Set observation and uncertainty of observation
                 self.y_0[obs_counter] = obs[o]*scale_observation
-                current_obs_min_error = obs_min_error if (self.y_0[obs_counter] < obs_zero) else obs_min_error*obs_zero_error_scale
+                current_obs_min_error = obs_min_error if (self.y_0[obs_counter] > obs_zero) else obs_min_error*obs_zero_error_scale
                 current_sigma_o = obs[o]*scale_observation*1.0 #FIXME: constant uncertainty
                 self.sigma_o[obs_counter] = np.sqrt(current_sigma_o**2 + obs_model_error**2 + current_obs_min_error**2)
 
