@@ -783,7 +783,10 @@ class MatchFiles:
         date = self.sim_files.date[valid_sim_files]
 
         if (len(non_matching_files) > 0):
-            self.logger.error("No matching timestep for observation time {:s} in {:s}!".format(str(obs_time), " ".join(non_matching_files)))
+            if (self.verbose):
+                self.logger.warning("No matching timestep for observation time {:s} in {:s}".format(str(obs_time), " ".join(non_matching_files)))
+            else:
+                self.logger.warning("No matching timestep for observation time {:s} in {:d} files".format(str(obs_time), len(non_matching_files)))
         return lon, lat, date, data
 
 
