@@ -761,7 +761,7 @@ class MatchFiles:
                     self.logger.debug("Observation time {:s}, matching emission time: {:s} ({:s}, timestep {:d} - {:s})".format(str(obs_time), str(emission_time), filename, timestep, str(sim_time[timestep])))
                 #FIXME: What is a reasonable delta here?
                 if (np.abs(sim_time[timestep] - np.array(obs_time, dtype=np.datetime64)) > datetime.timedelta(minutes=30)):
-                    non_matching_files += [filename]
+                    non_matching_files += [os.path.basename(filename)]
                     continue
 
                 n_levels_read = 0
@@ -782,7 +782,7 @@ class MatchFiles:
 
         date = self.sim_files.date[valid_sim_files]
 
-        if (len(non_matching_files > 0)):
+        if (len(non_matching_files) > 0):
             self.logger.error("No matching timestep for observation time {:s} in {:s}!".format(str(obs_time), " ".join(non_matching_files)))
         return lon, lat, date, data
 
