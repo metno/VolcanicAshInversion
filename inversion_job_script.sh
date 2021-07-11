@@ -86,6 +86,13 @@ echo ""
 inv_exec echo "==== Inversion run begin ===="
 
 
+#Print git version info for reproducibility
+inv_exec git log -n1
+inv_exec git status --porcelain
+inv_exec echo "INFO: Storing uncommited git changes in patch file '$RESULTS_DIR/uncommitted_changes.patch'"
+git diff > "$RESULTS_DIR/uncommitted_changes.patch"
+
+
 # Create a priori information from plume heights estimate
 inv_exec $SCRIPT_DIR/AshInv/APriori.py \
                     --config "$RUN_CONF_A_PRIORI" \
