@@ -338,7 +338,7 @@ def downsample(arr, target, rebin_type='median'):
     return rebin(arr, target_size, rebin_type)
 
 
-def plotAshInvMatrix(matrix, fig=None, downsample=True, rebin_type='median'):
+def plotAshInvMatrix(matrix, fig=None, do_downsample=True, rebin_type='median'):
     if (fig is None):
         fig = plt.figure(figsize=(18, 18))
 
@@ -350,7 +350,7 @@ def plotAshInvMatrix(matrix, fig=None, downsample=True, rebin_type='median'):
     extent = [0, matrix.shape[1], matrix.shape[0], 0]
 
     m = matrix
-    if (downsample):
+    if (do_downsample):
         m = downsample(matrix, fig_size, rebin_type)
 
     #For plotting, force negative numbers to zero

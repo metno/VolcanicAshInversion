@@ -430,7 +430,9 @@ class AshInversion():
                 if (use_elevations):
                     #Make a duplicate observation at same lat lon, but with zero above the given altitude
                     self.y_0[obs_counter+1] = 0
-                    self.sigma_o[obs_counter+1] = np.sqrt(obs_model_error**2 + (obs_min_error*obs_zero_error_scale)**2)
+                    #FIXME: Use small sigma here => assume height information is reliable
+                    #Should perhaps be updated to be a function from cloud top observatoin?
+                    self.sigma_o[obs_counter+1] = np.sqrt(obs_model_error**2 + obs_min_error**2)
                     altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o]))
                     altitude_ranges = [slice(0, altitude_max), slice(altitude_max, row.num_altitudes)]
 
