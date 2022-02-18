@@ -33,6 +33,8 @@ from netCDF4 import Dataset, num2date
 import os
 import re
 import json
+from joblib import Parallel, delayed
+import multiprocessing
 
 from AshInv import Misc
 
@@ -163,17 +165,29 @@ class MatchFiles:
             self.obs_files = pd.concat([self.obs_files, processed_obs_files])
             self.obs_files = self.obs_files.drop_duplicates('filename', keep='last')
             self.obs_files.reset_index(drop=True, inplace=True)
-
-        #Loop over observation files (outer loop)
-        num_obs = 0
-        num_zero_obs = 0
-        for obs_file in self.obs_files.itertuples():
+            
+        def match_single_file(obs_file):
             out_filename = os.path.splitext(os.path.basename(obs_file.filename))[0] + "_matched.nc"
+            out_filename_metadata = os.path.join(output_dir, os.path.splitext(out_filename)[0] + ".txt")
+            
+            if os.path.isfile(out_filename_metadata):
+                try: 
+                    with open(out_filename_metadata, 'r') as file:
+                        data = file.read().splitlines() 
+                        obs_file_index = int(data[0])
+                        out_filename = data[1]
+                        num_obs = int(data[2])
+                        num_zero_obs = int(data[3])
+                        num_timesteps = int(data[4])
+                        num_altitudes = int(data[5])
+                except:
+                    self.logger.warning("File {:d}/{:d} metadata file failed - reprocessing - {:s}".format(obs_file.Index+1, self.obs_files.shape[0], out_filename))
+                    pass
+                else:
+                    self.logger.info("File {:d}/{:d} already processed - {:s}".format(obs_file.Index+1, self.obs_files.shape[0], out_filename))
+                    return [obs_file_index, out_filename, num_obs, num_zero_obs, num_timesteps, num_altitudes]
+                    
             self.logger.info("Creating {:d}/{:d} - {:s}".format(obs_file.Index+1, self.obs_files.shape[0], out_filename))
-
-            if (pd.notna(obs_file.matched_file)):
-                self.logger.info("Already processed {:s}, skipping".format(obs_file.matched_file))
-                continue
 
             #Read observation data
             if (dummy_observation_json is not None):
@@ -187,7 +201,7 @@ class MatchFiles:
                 sim_lon, sim_lat, sim_date, sim = self.read_simulation_data(obs_file.date, min_days=min_days, max_days=max_days)
             except ValueError as e:
                 self.logger.error("Could not match {:s}. Got error {:s}".format(obs_file.filename, str(e)))
-                continue
+                return [obs_file.Index, obs_file.filename, 0, 0, 0, 0]
 
             #Make sure the two files match in size
             obs_lon, obs_lat, obs, obs_alt, obs_flag, sim = self.match_size(obs_lon, obs_lat, obs, obs_alt, obs_flag, sim_lon, sim_lat, sim)
@@ -246,22 +260,39 @@ class MatchFiles:
                 n_remove_af,
                 n_remove_zero,
                 n_total_zero))
-            num_obs += obs.size
-            num_zero_obs += n_total_zero-n_remove_zero
+            num_zero_obs = n_total_zero-n_remove_zero
 
             #Write to file
             self.write_matched_data(obs_lon, obs_lat, obs, obs_alt, obs_flag, obs_file.date, sim, sim_date, os.path.join(output_dir, out_filename))
+            
+            #Write metadata-file
+            statistics = [obs_file.Index, out_filename, obs.size, num_zero_obs, sim.shape[1], sim.shape[2]]
+            with open(out_filename_metadata, 'w') as file:
+                for stat in statistics:
+                    file.write(str(stat) + "\n")
+                    
+            #Return statistics
+            return statistics
+        
+        #Run file matching in parallel
+        num_cores = multiprocessing.cpu_count()
+        results = Parallel(n_jobs=num_cores)(delayed(match_single_file)(obs_file) for obs_file in self.obs_files.itertuples())
 
+        total_num_obs = 0
+        total_num_zero_obs = 0
+        for result in results:
             #Update statistics for this file
-            self.obs_files.at[obs_file.Index, "matched_file"] = out_filename
-            self.obs_files.at[obs_file.Index, "num_observations"] = obs.size
-            self.obs_files.at[obs_file.Index, "num_timesteps"] = sim.shape[1]
-            self.obs_files.at[obs_file.Index, "num_altitudes"] = sim.shape[2]
+            self.obs_files.at[result[0], "matched_file"] = result[1]
+            self.obs_files.at[result[0], "num_observations"] = result[2]
+            self.obs_files.at[result[0], "num_timesteps"] = result[4]
+            self.obs_files.at[result[0], "num_altitudes"] = result[5]
+            
+            total_num_obs += result[2]
+            total_num_zero_obs += result[3]
 
-            #Update CSV-file
-            self.obs_files.to_csv(matched_out_csv, index=False)
-        self.logger.info("Added a total of {:d} observations ({:.2f} % zeros)".format(num_obs, 100*num_zero_obs/max(1, num_obs)))
-
+        #Update CSV-file
+        self.obs_files.to_csv(matched_out_csv, index=False)
+        self.logger.info("Added a total of {:d} observations ({:.2f} % zeros) from {:d} files".format(total_num_obs, 100*total_num_zero_obs/max(1, total_num_obs), len(results)))
 
 
 
