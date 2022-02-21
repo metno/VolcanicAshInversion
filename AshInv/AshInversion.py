@@ -418,7 +418,6 @@ class AshInversion():
 
             #  Assemble system matrix
             timers['start']['asm'] = time.time()
-            max_i_width = 0
             for o in range(n_obs):
                 #Set observation and uncertainty of observation
                 self.y_0[obs_counter] = obs[o]*scale_observation
@@ -438,15 +437,7 @@ class AshInversion():
                     altitude_ranges = [slice(0, altitude_max), slice(altitude_max, row.num_altitudes)]
 
                 for altitude_range in altitude_ranges:
-                    #Find valid values and indices
-                    #Valid = not masked index && value > 0 && not masked
-                    timers['start']['asm0'] += time.time()
-                    indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
-                    Q_c[obs_counter % num_obs_per_update, indices] = sim[o, time_index[0], altitude_range].ravel(order='C')*scale_emission
-                    indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
-
-                    timers['end']['asm0'] += time.time()
-
+                    #Assemble the Q_c buffer into Q and B.
                     if (obs_counter > 0 and obs_counter % num_obs_per_update == 0):
                         timers['start']['asm1'] += time.time()
                         #Precompute matrices
@@ -459,10 +450,16 @@ class AshInversion():
                         self.Q += np.matmul(Q_c_sigma_om2, Q_c)
 
                         #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                        self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter] - np.matmul(Q_c, self.x_a))
+                        self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter-num_obs_per_update:obs_counter] - np.matmul(Q_c, self.x_a))
+                        Q_c.fill(0.0)
                         timers['end']['asm2'] += time.time()
                         
-                        Q_c.fill(0.0)
+                    #Find valid values and indices
+                    #Valid = not masked index && value > 0 && not masked
+                    timers['start']['asm0'] += time.time()
+                    indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
+                    Q_c[obs_counter % num_obs_per_update, indices] = sim[o, time_index[0], altitude_range].ravel(order='C')*scale_emission
+                    timers['end']['asm0'] += time.time()
 
                     if (store_full_matrix):
                         timers['start']['asm3'] += time.time()
@@ -475,15 +472,7 @@ class AshInversion():
 
                     obs_counter = obs_counter+1
 
-
-            #Increase accuracy by grouping additions
-            #(ref Kahan summation and rounding)
-            
-            
-            
-            ###################################
-            #FIXME: Last row
-            ##################################
+            #Asseble last set of Q_c observations
             last_row = row_index+1 == matched_files_df.shape[0]
             if (last_row):
                 timers['start']['asm1'] += time.time()
@@ -497,49 +486,9 @@ class AshInversion():
                 self.Q += np.matmul(Q_c_sigma_om2, Q_c)
 
                 #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter] - np.matmul(Q_c, self.x_a))
+                self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter-num_obs_per_update:obs_counter] - np.matmul(Q_c, self.x_a))
                 timers['end']['asm2'] += time.time()
-                
-            """
-            sum_counter += n_obs
-            last_row = row_index+1 == matched_files_df.shape[0]
-            if ((sum_counter > 1.0e5) or last_row):
-                if  not last_row:
-                    valid_Q = (self.Q != 0.0)
-                    if (np.sum(valid_Q) > 0):
-                        with np.errstate(divide='ignore', invalid='ignore'):
-                            # self.Q might be zero initially
-                            valid_Q = np.logical_and(Q_c != 0.0, valid_Q, np.nan_to_num(Q_c / self.Q) > 1.0e-5)
-                    else:
-                        valid_Q = Q_c > 0.0
 
-                    valid_B = self.B != 0.0
-                    if (np.sum(valid_B) > 0):
-                        with np.errstate(divide='ignore', invalid='ignore'):
-                            # self.B might be zero initially
-                            valid_B = np.logical_and(B_c != 0.0, valid_B, np.nan_to_num(B_c / self.B) > 1.0e-5)
-                    else:
-                        valid_B = (B_c != 0.0)
-                else:
-                    valid_Q = (Q_c != 0.0)
-                    valid_B = (B_c != 0.0)
-
-                num_valid_Q = np.sum(valid_Q)
-                num_valid_B = np.sum(valid_B)
-
-                self.logger.info("#valid Q={:d}".format(num_valid_Q))
-                self.logger.info("#valid B={:d}".format(num_valid_B))
-
-                if (num_valid_Q > 0):
-                    self.Q[valid_Q] += Q_c[valid_Q]
-                    Q_c[valid_Q] = 0.0
-
-                if (num_valid_B > 0):
-                    self.B[valid_B] += B_c[valid_B]
-                    B_c[valid_B] = 0.0
-
-                sum_counter = 0
-            """
             timers['end']['asm'] = time.time()
             timers['end']['tot'] = time.time()
 
@@ -571,7 +520,6 @@ class AshInversion():
             logstr += ["mem={:.1f} GB".format(self.get_memory_usage_gb())]
             for key in timers['start'].keys():
                 logstr += ["{:s}={:.1f} s".format(key, timers['end'][key] - timers['start'][key])]
-            logstr += ["width={:d}".format(max_i_width)]
             self.logger.info(", ".join(logstr))
 
 
