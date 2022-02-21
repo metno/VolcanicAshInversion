@@ -302,8 +302,10 @@ class AshInversion():
         #LSQR system matrix Q and right hand side B
         self.Q = np.zeros((num_emissions, num_emissions), dtype=np.float64)
         self.B = np.zeros((num_emissions), dtype = np.float64)
-        Q_c = np.zeros_like(self.Q)
-        B_c = np.zeros_like(self.B)
+        
+        #For faster processing - chunk 
+        num_obs_per_update = 1000
+        Q_c = np.zeros((num_obs_per_update, num_emissions), dtype=np.float64)
         sum_counter = 0
 
         #Right hand sides
@@ -324,7 +326,6 @@ class AshInversion():
             current_index = extra_data['current_index']
             nnz_counter = extra_data['nnz_counter']
             Q_c = extra_data['Q_c']
-            B_c = extra_data['B_c']
 
         start_assembly = time.time()
         next_save_time = time.time()
@@ -440,50 +441,66 @@ class AshInversion():
                     #Find valid values and indices
                     #Valid = not masked index && value > 0 && not masked
                     timers['start']['asm0'] += time.time()
-                    vals = sim[o, time_index[0], altitude_range].ravel(order='C')
+                    indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
+                    Q_c[obs_counter % num_obs_per_update, indices] = sim[o, time_index[0], altitude_range].ravel(order='C')*scale_emission
                     indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
 
-                    assert (vals.shape == indices.shape), "Number of values {:d} does not match up with number of indices {:d}".format(str(vals.shape), str(indices.shape))
-
-                    valid_vals = np.flatnonzero(indices >= 0)
-                    valid_vals = valid_vals[vals[valid_vals] > 0.0]
-
-                    vals = vals[valid_vals]*scale_emission
-                    indices = indices[valid_vals]
                     timers['end']['asm0'] += time.time()
 
-                    if (indices.size > 0):
-                        #Compute matrix product Q = M^T sigma_o^-2 M without storing M
-                        #Uses clever (basic) indexing to avoid superfluous copying of data
+                    if (obs_counter > 0 and obs_counter % num_obs_per_update == 0):
                         timers['start']['asm1'] += time.time()
-                        i_min = indices.min()
-                        i_max = indices.max()+1
-                        max_i_width = max(i_max-i_min-1, max_i_width)
-                        v = np.zeros(i_max - i_min)
-                        v[indices-i_min] = vals
-                        V = np.outer(v/(self.sigma_o[obs_counter]**2), v)
+                        #Precompute matrices
+                        sigma_o_m2 = np.diag(1/(self.sigma_o[obs_counter-num_obs_per_update:obs_counter]**2))
+                        Q_c_sigma_om2 = np.matmul(Q_c.T, sigma_o_m2)
                         timers['end']['asm1'] += time.time()
+
                         timers['start']['asm2'] += time.time()
-                        Q_c[i_min:i_max, i_min:i_max] += V
-                        timers['end']['asm2'] += time.time()
+                        #Compute matrix product Q = M^T sigma_o^-2 M without storing M
+                        self.Q += np.matmul(Q_c_sigma_om2, Q_c)
 
                         #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                        B_c[i_min:i_max] += v*(self.y_0[obs_counter] - np.dot(v, self.x_a[i_min:i_max])) / (self.sigma_o[obs_counter]**2)
+                        self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter] - np.matmul(Q_c, self.x_a))
+                        timers['end']['asm2'] += time.time()
+                        
+                        Q_c.fill(0.0)
 
-                        if (store_full_matrix):
-                            timers['start']['asm3'] += time.time()
-                            nnz_next = nnz_counter+vals.size
-                            M_indices[nnz_counter:nnz_next] = indices
-                            M_data[nnz_counter:nnz_next] = vals
-                            M_indptr[obs_counter+1] = vals.size
-                            nnz_counter = nnz_next
-                            timers['end']['asm3'] += time.time()
+                    if (store_full_matrix):
+                        timers['start']['asm3'] += time.time()
+                        nnz_next = nnz_counter+vals.size
+                        M_indices[nnz_counter:nnz_next] = indices
+                        M_data[nnz_counter:nnz_next] = vals
+                        M_indptr[obs_counter+1] = vals.size
+                        nnz_counter = nnz_next
+                        timers['end']['asm3'] += time.time()
 
                     obs_counter = obs_counter+1
 
 
             #Increase accuracy by grouping additions
             #(ref Kahan summation and rounding)
+            
+            
+            
+            ###################################
+            #FIXME: Last row
+            ##################################
+            last_row = row_index+1 == matched_files_df.shape[0]
+            if (last_row):
+                timers['start']['asm1'] += time.time()
+                #Precompute matrices
+                sigma_o_m2 = np.diag(1/(self.sigma_o[obs_counter-num_obs_per_update:obs_counter]**2))
+                Q_c_sigma_om2 = np.matmul(Q_c.T, sigma_o_m2)
+                timers['end']['asm1'] += time.time()
+
+                timers['start']['asm2'] += time.time()
+                #Compute matrix product Q = M^T sigma_o^-2 M without storing M
+                self.Q += np.matmul(Q_c_sigma_om2, Q_c)
+
+                #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
+                self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter] - np.matmul(Q_c, self.x_a))
+                timers['end']['asm2'] += time.time()
+                
+            """
             sum_counter += n_obs
             last_row = row_index+1 == matched_files_df.shape[0]
             if ((sum_counter > 1.0e5) or last_row):
@@ -522,7 +539,7 @@ class AshInversion():
                     B_c[valid_B] = 0.0
 
                 sum_counter = 0
-
+            """
             timers['end']['asm'] = time.time()
             timers['end']['tot'] = time.time()
 
@@ -532,7 +549,6 @@ class AshInversion():
                 current_index = row_index+1
                 extra_data =  {
                     'Q_c': Q_c,
-                    'B_c': B_c,
                     'obs_counter': obs_counter,
                     'n_removed': n_removed,
                     'current_index': current_index,
