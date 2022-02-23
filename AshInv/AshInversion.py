@@ -458,7 +458,8 @@ class AshInversion():
                     #Valid = not masked index && value > 0 && not masked
                     timers['start']['asm0'] += time.time()
                     indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
-                    Q_c[obs_counter % num_obs_per_update, indices] = sim[o, time_index[0], altitude_range].ravel(order='C')*scale_emission
+                    vals = sim[o, time_index[0], altitude_range].ravel(order='C')*scale_emission
+                    Q_c[obs_counter % num_obs_per_update, indices] = vals
                     timers['end']['asm0'] += time.time()
 
                     if (store_full_matrix):
