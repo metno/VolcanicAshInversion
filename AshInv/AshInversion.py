@@ -259,20 +259,6 @@ class AshInversion():
         def npTimeToDatetime(np_time):
             return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's'))
 
-        #Remove timesteps from a priori that don't match up with matched files (make system matrix far smaller)
-        matched_times = np.array(matched_files_df["date"], dtype='datetime64[ns]')
-        remove = np.ones((self.level_heights.size, self.emission_times.size), dtype=np.bool)
-        for t, emission_time in enumerate(self.emission_times):
-            #FIXME: These should correspond to the limits in MatchFiles.py
-            min_days=0
-            max_days=6
-            deltas = (matched_times - emission_time) / np.timedelta64(1, 'D')
-            valid = (deltas >= min_days) & (deltas < max_days)
-            if np.any(valid):
-                remove[:,t] = False
-        self.logger.info("Removing {:d}/{:d} a priori values without observations".format(np.count_nonzero(remove), self.emission_times.size*self.level_heights.size))
-        self.make_ordering_index(remove)
-
         #Allocate data
         gc.collect()
         num_emissions = np.count_nonzero(self.ordering_index >= 0)
@@ -292,12 +278,9 @@ class AshInversion():
                     total_num_emis,
                     total_num_emis*(8+8)/(1024*1024*1024)))
             #Allocated this way on purpose to force numpy to preallocate data for us
-            M_data = np.empty(total_num_emis, dtype=np.float64)
-            M_indices = np.empty(total_num_emis, dtype=np.int64)
-            M_indptr = np.empty(total_num_obs+1, dtype=np.int64)
-            M_data.fill(0.0)
-            M_indices.fill(0)
-            M_indptr.fill(0)
+            M_data = np.zeros(total_num_emis, dtype=np.float64)
+            M_indices = np.zeros(total_num_emis, dtype=np.int64)
+            M_indptr = np.zeros(total_num_obs+1, dtype=np.int64)
 
         #LSQR system matrix Q and right hand side B
         self.Q = np.zeros((num_emissions, num_emissions), dtype=np.float64)
@@ -377,24 +360,29 @@ class AshInversion():
                 if (self.args['verbose'] > 90):
                     self.logger.debug("Time indices: {:s}".format(str(time_index)))
 
-                #Get observations that are unmasked
-                obs = nc_file['obs'][:]
-                n_obs = len(obs)
+                if len(time_index[0]) > 0:
+                    #Get observations that are unmasked
+                    obs = nc_file['obs'][:]
+                    n_obs = len(obs)
 
-                obs_flag = nc_file['obs_flag'][:]
+                    obs_flag = nc_file['obs_flag'][:]
 
-                if (use_elevations):
-                    obs_alt = nc_file['obs_alt'][:]*1000 #FIXME: Given in KM
+                    if (use_elevations):
+                        obs_alt = nc_file['obs_alt'][:]*1000 #FIXME: Given in KM
 
-                #Read simulation data from disk
-                sim = nc_file['sim'][:,:,:]
-                timers['end']['dsk'] = time.time()
+                    #Read simulation data from disk
+                    sim = nc_file['sim'][:,:,:]
+                    timers['end']['dsk'] = time.time()
             except Exception as e:
                 self.logger.error("Could not open NetCDF file {:s}".format(filename))
                 raise e
             finally:
                 nc_file.close()
                 nc_file = None
+              
+            if len(time_index[0]) == 0:
+                self.logger.warning("File {:s} does not have any relevant timesteps, skipping.".format(filename))
+                continue
 
             #Check sizes
             assert (n_obs == row.num_observations), "Number of unmasked observations {:d} does not match up with expected {:d}".format(n_obs, row.num_observations)
@@ -415,6 +403,27 @@ class AshInversion():
             if (store_full_matrix):
                 timers['start']['asm3'] = 0
                 timers['end']['asm3'] = 0
+                
+            def assemble(Q_c):
+                """Helper function to avoid code duplication"""
+                timers['start']['asm1'] += time.time()
+                #Scale Q matrix
+                Q_c = Q_c*scale_emission
+
+                #Precompute matrices
+                sigma_o_m2 = np.diag(1/(self.sigma_o[obs_counter-num_obs_per_update:obs_counter]**2))
+                Q_c_sigma_om2 = np.matmul(Q_c.T, sigma_o_m2)
+                timers['end']['asm1'] += time.time()
+
+                timers['start']['asm2'] += time.time()
+                #Compute matrix product Q = M^T sigma_o^-2 M without storing M
+                self.Q += np.matmul(Q_c_sigma_om2, Q_c)
+
+                #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
+                self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter-num_obs_per_update:obs_counter] - np.matmul(Q_c, self.x_a))
+                Q_c.fill(0.0)
+                timers['end']['asm2'] += time.time()
+                
 
             #  Assemble system matrix
             timers['start']['asm'] = time.time()
@@ -439,26 +448,12 @@ class AshInversion():
                 for altitude_range in altitude_ranges:
                     #Assemble the Q_c buffer into Q and B.
                     if (obs_counter > 0 and obs_counter % num_obs_per_update == 0):
-                        timers['start']['asm1'] += time.time()
-                        #Precompute matrices
-                        sigma_o_m2 = np.diag(1/(self.sigma_o[obs_counter-num_obs_per_update:obs_counter]**2))
-                        Q_c_sigma_om2 = np.matmul(Q_c.T, sigma_o_m2)
-                        timers['end']['asm1'] += time.time()
-
-                        timers['start']['asm2'] += time.time()
-                        #Compute matrix product Q = M^T sigma_o^-2 M without storing M
-                        self.Q += np.matmul(Q_c_sigma_om2, Q_c)
-
-                        #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                        self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter-num_obs_per_update:obs_counter] - np.matmul(Q_c, self.x_a))
-                        Q_c.fill(0.0)
-                        timers['end']['asm2'] += time.time()
+                        assemble(Q_c)
                         
-                    #Find valid values and indices
-                    #Valid = not masked index && value > 0 && not masked
+                    #Insert simulation values into the Q_c matrix
                     timers['start']['asm0'] += time.time()
                     indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
-                    vals = sim[o, time_index[0], altitude_range].ravel(order='C')*scale_emission
+                    vals = sim[o, time_index[0], altitude_range].ravel(order='C')
                     Q_c[obs_counter % num_obs_per_update, indices] = vals
                     timers['end']['asm0'] += time.time()
 
@@ -476,19 +471,7 @@ class AshInversion():
             #Asseble last set of Q_c observations
             last_row = row_index+1 == matched_files_df.shape[0]
             if (last_row):
-                timers['start']['asm1'] += time.time()
-                #Precompute matrices
-                sigma_o_m2 = np.diag(1/(self.sigma_o[obs_counter-num_obs_per_update:obs_counter]**2))
-                Q_c_sigma_om2 = np.matmul(Q_c.T, sigma_o_m2)
-                timers['end']['asm1'] += time.time()
-
-                timers['start']['asm2'] += time.time()
-                #Compute matrix product Q = M^T sigma_o^-2 M without storing M
-                self.Q += np.matmul(Q_c_sigma_om2, Q_c)
-
-                #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter-num_obs_per_update:obs_counter] - np.matmul(Q_c, self.x_a))
-                timers['end']['asm2'] += time.time()
+                assemble(Q_c)
 
             timers['end']['asm'] = time.time()
             timers['end']['tot'] = time.time()

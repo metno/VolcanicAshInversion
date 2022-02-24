@@ -226,8 +226,6 @@ if __name__ == "__main__":
     for key in output.keys():
         if isinstance(output[key], (np.ndarray, np.generic)):
             output[key] = output[key].tolist()
-        if isinstance(output[key], list):
-            print(key, type(output[key][0]))
     for key in output['args'].keys():
         output['args'][key] = str(output['args'][key])
     with open(args.a_priori_file, 'w') as outfile:
