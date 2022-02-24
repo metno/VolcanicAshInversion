@@ -53,7 +53,7 @@ class MatchFiles:
         self.sim_files = pd.read_csv(emep_runs, parse_dates=[0], comment='#')
         self.obs_files = pd.read_csv(satellite_observations, parse_dates=[0], comment='#')
 
-        #Remove timezone information
+        #Convert to UTC and remove timezone information
         self.logger.warning("Converting times from CSV files to UTC")
         self.sim_files['date'] = self.sim_files['date'].dt.tz_convert(None)
         self.obs_files['date'] = self.obs_files['date'].dt.tz_convert(None)
@@ -84,7 +84,9 @@ class MatchFiles:
                     fix_broken_netcdf_files=False,
                     volcano_lat=None,
                     volcano_lon=None,
-                    max_distance=None):
+                    max_distance=None,
+                    min_time=datetime.datetime.min,
+                    max_time=datetime.datetime.max):
         """
         Loops through all observation files, and tries to match observation with simulations
 
@@ -118,33 +120,34 @@ class MatchFiles:
             else:
                 nc_file.close()
 
-            #Raise error if timezone supplied in NetCDF file
+            #Raise error if wrong timezone supplied in NetCDF file (should be UTC or none)
             for i in range(len(sim_time)):
-                if (sim_time[i].tzinfo is not None and sim_time[i].tzinfo is not datetime.timezone.utc):
-                    raise RuntimeError("Invalid timezone info in {:s}".format(row['filename']))
-                else:
-                    #Remove timezone info
+                if (sim_time[i].tzinfo is None):
+                    continue
+                elif (sim_time[i].tzinfo is datetime.timezone.utc):
                     sim_time[i].replace(tzinfo=None)
+                else:
+                    raise RuntimeError("Invalid timezone info in {:s}".format(row['filename']))
 
             #Find minimum and maximum time
-            min_time = sim_time[0]
-            max_time = sim_time[0]
+            min_t = sim_time[0]
+            max_t = sim_time[0]
             for t in sim_time[1:]:
-                min_time = min(min_time, t)
-                max_time = max(max_time, t)
+                min_t = min(min_t, t)
+                max_t = max(max_t, t)
 
-            return min_time, max_time
+            return min_t, max_t
 
         self.sim_files['first_ts'], self.sim_files['last_ts'] = zip(*self.sim_files.apply(getNCTimes, axis=1))
 
-        #Prune observation files that clearly do not match up
+        #Prune observation files that do not match up
         valid_obs_files = np.empty(self.obs_files.shape[0], dtype=np.bool)
         for i in range(self.obs_files.shape[0]):
             #All observations with no matching simulation can be removed
             obs_time = self.obs_files.date[i]
             first = (obs_time - self.sim_files.first_ts) / datetime.timedelta(days=1)
             last = (obs_time - self.sim_files.last_ts) / datetime.timedelta(days=1)
-            valid_sim_files = (first >= 0) & (last <= 0)
+            valid_sim_files = (first >= min_days) & (last <= max_days) & (self.sim_files.first_ts <= max_time) & (self.sim_files.last_ts >= min_time)
             valid_obs_files[i] = np.any(valid_sim_files)
         if (np.count_nonzero(valid_obs_files) < self.obs_files.shape[0]):
             self.logger.info("Removing {:d}/{:d} non-matching observation files".format(self.obs_files.shape[0]-np.count_nonzero(valid_obs_files), self.obs_files.shape[0]))
@@ -198,7 +201,7 @@ class MatchFiles:
 
             #Read simulation data
             try:
-                sim_lon, sim_lat, sim_date, sim = self.read_simulation_data(obs_file.date, min_days=min_days, max_days=max_days)
+                sim_lon, sim_lat, sim_date, sim = self.read_simulation_data(obs_file.date, min_days=min_days, max_days=max_days, min_time=min_time, max_time=max_time)
             except ValueError as e:
                 self.logger.error("Could not match {:s}. Got error {:s}".format(obs_file.filename, str(e)))
                 return [obs_file.Index, obs_file.filename, 0, 0, 0, 0]
@@ -690,6 +693,7 @@ class MatchFiles:
 
     def read_simulation_data(self, obs_time,
                              min_days=0, max_days=6,
+                             min_time=datetime.datetime.min, max_time=datetime.datetime.max,
                              level_regex="COLUMN_ASH_L(\d+)_k(\d+)"):
         """
         Reads all the simulation files in valid_sim_files, and returns an array
@@ -729,7 +733,7 @@ class MatchFiles:
         #and process these
         first = (obs_time - self.sim_files.first_ts) / datetime.timedelta(days=1)
         last = (obs_time - self.sim_files.last_ts) / datetime.timedelta(days=1)
-        valid_sim_files = (first >= min_days) & (last <= max_days)
+        valid_sim_files = (first >= min_days) & (last <= max_days) & (self.sim_files.first_ts <= max_time) & (self.sim_files.last_ts >= min_time)
         valid_sim_files = np.atleast_1d(np.squeeze(np.nonzero(valid_sim_files)))
         if (len(valid_sim_files) == 0):
             raise ValueError("No valid simulation files found!")
@@ -866,6 +870,10 @@ if __name__ == "__main__":
                         help="Longitude of volcano (used as distance criteria)", default=None)
     parser.add('--max_distance', type=float,
                         help="Maximum distance from volcano to consider (in km)", default=None)
+    parser.add("--min_time", type=datetime.datetime.fromisoformat, default=datetime.datetime.min, 
+                        help="Emissions starting before this time are ignored")
+    parser.add("--max_time", type=datetime.datetime.fromisoformat, default=datetime.datetime.max, 
+                        help="Emissions starting after this time are ignored")
 
     args = parser.parse_args()
 
@@ -879,6 +887,10 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.INFO)
 
     np.random.seed(seed=args.random_seed)
+    
+    #Convert min/max time to utc and remove timezone info
+    args.max_time = args.max_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    args.min_time = args.min_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
 
     match = MatchFiles(emep_runs=args.simulation_csv,
                    satellite_observations=args.observation_csv,
@@ -896,4 +908,6 @@ if __name__ == "__main__":
                       min_days=args.min_days,
                       volcano_lat=args.volcano_lat,
                       volcano_lon=args.volcano_lon,
-                      max_distance=args.max_distance)
+                      max_distance=args.max_distance,
+                      min_time=args.min_time,
+                      max_time=args.max_time)
