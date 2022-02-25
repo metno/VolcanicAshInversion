@@ -870,9 +870,9 @@ if __name__ == "__main__":
                         help="Longitude of volcano (used as distance criteria)", default=None)
     parser.add('--max_distance', type=float,
                         help="Maximum distance from volcano to consider (in km)", default=None)
-    parser.add("--min_time", type=datetime.datetime.fromisoformat, default=datetime.datetime.min, 
+    parser.add("--min_time", type=datetime.datetime.fromisoformat, default=datetime.datetime(1900,1,1), 
                         help="Emissions starting before this time are ignored")
-    parser.add("--max_time", type=datetime.datetime.fromisoformat, default=datetime.datetime.max, 
+    parser.add("--max_time", type=datetime.datetime.fromisoformat, default=datetime.datetime(2100,1,1), 
                         help="Emissions starting after this time are ignored")
 
     args = parser.parse_args()

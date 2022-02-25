@@ -875,15 +875,16 @@ if __name__ == '__main__':
         print("{:s} = {:s}".format(var, str(val)))
     print("=======================================")
 
-    with open(args.config) as cfg_file:
-        cfg = cfg_file.read()
-
     run_meta = {
         'arguments': json.dumps(vars(args)),
         'run_date': datetime.datetime.utcnow().isoformat(timespec='seconds'),
-        'run_dir': os.getcwd(),
-        'config': json.dumps(cfg)
+        'run_dir': os.getcwd()
     }
+
+    if args.config is not None:
+        with open(args.config) as cfg_file:
+            cfg = cfg_file.read()
+        run_meta['config'] = json.dumps(cfg)
 
 
     if (args.verbose):
