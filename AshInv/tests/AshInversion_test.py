@@ -72,9 +72,9 @@ def test_MatchFiles():
     """ Regression test for matching files """
     
     script = os.path.join(basepath, "AshInv", "MatchFiles.py")
-    output_file = os.path.join(datapath, 'MSG2-ASH-IcelandEurope_1088_0088_1537x494-201005231800_ExtendedVOLE_lognormal_1_5_gridded_matched.nc')
-    output_file_txt = os.path.join(datapath, 'MSG2-ASH-IcelandEurope_1088_0088_1537x494-201005231800_ExtendedVOLE_lognormal_1_5_gridded_matched.txt')
-    reference = os.path.join(datapath, 'MSG2-ASH-IcelandEurope_1088_0088_1537x494-201005231800_ExtendedVOLE_lognormal_1_5_gridded_matched_reference.nc')
+    output_file = os.path.join(datapath, 'MSG2-ASH-IcelandEurope_1088_0088_1537x494-201004141200_ExtendedVOLE_lognormal_1_5_gridded_matched.nc')
+    output_file_txt = os.path.join(datapath, 'MSG2-ASH-IcelandEurope_1088_0088_1537x494-201004141200_ExtendedVOLE_lognormal_1_5_gridded_matched.txt')
+    reference = os.path.join(datapath, 'MSG2-ASH-IcelandEurope_1088_0088_1537x494-201004141200_ExtendedVOLE_lognormal_1_5_gridded_matched_reference.nc')
     
     for f in [output_file, output_file_txt, matched_files]:
         if os.path.exists(f):
@@ -119,7 +119,9 @@ def test_MatchFiles():
     assert np.allclose(lat, lat_ref)
     assert np.allclose(obs, obs_ref)
     assert np.allclose(obs_flag, obs_flag_ref)
-    assert np.allclose(sim, sim_ref)    
+    assert np.allclose(sim, sim_ref)
+    assert obs.max() > 0
+    assert sim.max() > 0
 
     
     
@@ -189,8 +191,10 @@ def test_AshInversionMatrix():
     indptr = np.append(indices, indices[-1])
     sigma_o_m2 = sparse.csr_matrix((sigma_o_m2, indices, indptr), shape=(N, N))
     
+    assert Q.max() > 0
+    
     Q_star = (M.T).dot(sigma_o_m2)
     Q_new = Q_star.dot(M).todense()
-    
+        
     assert np.allclose(Q, Q_new)
-    assert Q.max() > 0
+    

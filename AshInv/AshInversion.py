@@ -461,7 +461,7 @@ class AshInversion():
                         timers['start']['asm3'] += time.time()
                         nnz_next = nnz_counter+vals.size
                         M_indices[nnz_counter:nnz_next] = indices
-                        M_data[nnz_counter:nnz_next] = vals
+                        M_data[nnz_counter:nnz_next] = vals*scale_emission
                         M_indptr[obs_counter+1] = vals.size
                         nnz_counter = nnz_next
                         timers['end']['asm3'] += time.time()
