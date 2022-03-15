@@ -23,14 +23,15 @@
 ##############################################################################
 
 set -e #Stop on first error
+#set -x #echo commands (useful for debugging)
 
 #Absolute path of script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 
 #Read internal config that sets some of the default parameters
-DEFAULTS_FILE="$(realpath "$SCRIPT_DIR/../internal/inversion_defaults.sh")"
-if [[ -f $DEFAULTS_FILE ]]; then
+DEFAULTS_FILE="$(realpath "$SCRIPT_DIR/../internal/inversion_defaults.sh" || echo 'NONE')"
+if [[ -f "$DEFAULTS_FILE" ]]; then
     echo "Using defaults from $DEFAULTS_FILE"
     source $DEFAULTS_FILE
 else

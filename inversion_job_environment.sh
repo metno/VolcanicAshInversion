@@ -86,4 +86,4 @@ source $SCRIPT_DIR/inversion_job_conda.sh
 ##########################
 # Call actual job script #
 ##########################
-$SCRIPT_DIR/inversion_job_script.sh
+$SCRIPT_DIR/inversion_job_script.sh $*

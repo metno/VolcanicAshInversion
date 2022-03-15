@@ -22,6 +22,8 @@
 #                                                                            #
 ##############################################################################
 
+#set -x #echo commands (useful for debugging)
+
 if [[ "$_" == "$0" ]]; then
     echo "ERROR: Script is a subshell."
     echo "INFO: Execute 'source ${BASH_SOURCE[0]}' instead"
@@ -32,25 +34,34 @@ if [ "$CONDA_INITIALIZED" == "1" ]; then
     echo "Conda already initialized"
 else
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-    CONDA_EXE="$SCRIPT_DIR/miniconda3/bin/conda"
-    CONDA_ENV_PATH="$SCRIPT_DIR/conda_ash_inv"
+    CONDA_EXE=${CONDA_EXE:-$SCRIPT_DIR/miniconda3/bin/conda}
+    CONDA_ENV_NAME="ash_inversion_env"
 
 
     # Check that conda has been set up correctly
     if [[ ! -f $CONDA_EXE ]]; then
-        echo "ERROR: Conda has not been set up correctly! Please download and install conda"
-        exit -1
+		echo "Could not find $CONDA_EXE, searching for conda in path"
+		if [[ $(type -P "conda") ]]; then
+			CONDA_EXE="$(type -P "conda")"
+			echo "Using conda in path: $CONDA_EXE"
+		else
+			echo "ERROR: Conda has not been set up correctly! Please download and install conda"
+			exit -1
+		fi
     fi
-    if [[ ! -d $CONDA_ENV_PATH ]]; then
-        echo "ERROR: Conda environment has not been set up correctly! Please set up environment"
-        exit -1
+	
+	#Initialize conda
+	eval "$($CONDA_EXE shell.bash hook)"
+	#source "$(dirname $CONDA_EXE)/../etc/profile.d/conda.sh"
+	
+    if [[ $(conda activate $CONDA_ENV_NAME && echo "SUCCESS") != SUCCESS ]]; then
+        echo "ERROR: Conda environment has not been set up correctly! Setting up automatically"
+		conda create --name "$CONDA_ENV_NAME" --file "$SCRIPT_DIR/ash_inv.yml"
     fi
 
 
     # Setup conda environment
-    eval "$($CONDA_EXE shell.bash hook)"
-    conda activate $CONDA_ENV_PATH
-
+	conda activate $CONDA_ENV_NAME
 
     #Clean up function
     function cleanup_conda {
