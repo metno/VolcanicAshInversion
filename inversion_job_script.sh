@@ -46,6 +46,7 @@ RUN_A_PRIORI=${RUN_A_PRIORI:-0}
 RUN_MATCH_FILES=${RUN_MATCH_FILES:-0}
 RUN_INVERSION=${RUN_INVERSION:-0}
 RUN_PLOTS=${RUN_PLOTS:-0}
+RUN_A_POSTERIORI_CSV=${RUN_A_POSTERIORI_CSV:-0}
 SOLVER=${SOLVER:-"direct"}
 RUN_DATE=${RUN_DATE:-$(date +"%Y%m%dT%H%MZ")}
 RESULTS_DIR=${RESULTS_DIR:-"$RUN_DIR/results/${TAG}_${RUN_DATE}"}
@@ -64,6 +65,7 @@ function usage {
     echo "     --run-matchfiles            # Run match files script (colocate observation and simulation)"
     echo "     --run-inversion             # Run inversion code"
     echo "     --run-plots                 # Run plots"
+    echo "     --run-aposteriori-csv       # Create a posteriori csv files (suitable for eEMEP simulations)"
     echo " "
     echo "Options for inversion:"
     echo "     --solver {direct|inverse|pseudo_inverse"
@@ -81,6 +83,7 @@ while [[ $# -gt 0 ]]; do
         --run-matchfiles)      RUN_MATCH_FILES=1         ;;
         --run-inversion)       RUN_INVERSION=1           ;;
         --run-plots)           RUN_PLOTS=1               ;;
+        --run-aposteriori-csv) RUN_A_POSTERIORI_CSV=1    ;;
         --solver)        [ $# -gt 0 ] &&      SOLVER="$1" && shift ;;
         --results-dir)   [ $# -gt 0 ] && RESULTS_DIR=$(realpath "$1") && shift ;;
         -h|--help)
@@ -100,13 +103,15 @@ if [[ $RUN_SETUP == 0             \
         && $RUN_A_PRIORI == 0    \
         && $RUN_MATCH_FILES == 0 \
         && $RUN_INVERSION == 0   \
-        && $RUN_PLOTS == 0 ]]; then
+        && $RUN_PLOTS == 0 \
+        && $RUN_A_POSTERIORI_CSV == 0 ]]; then
     echo "No options selected: running all parts of inversion"
     RUN_SETUP=1
     RUN_A_PRIORI=1
     RUN_MATCH_FILES=1
     RUN_INVERSION=1
     RUN_PLOTS=1
+    RUN_A_POSTERIORI_CSV=1
 fi
 
 
@@ -222,25 +227,27 @@ if [ $RUN_INVERSION == 1 ]; then
 fi
 
 
-
-if [ $RUN_PLOTS == 1 ]; then
+if [ $RUN_A_POSTERIORI_CSV == 1 ]; then
+    inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
+                    --variable 'a_priori_2d' \
+                    --output "$RESULTS_DIR/a_priori.csv" \
+                    --json $RESULT_JSON
+                    
     for RESULT_JSON in $RESULTS_DIR/inversion_*_a_posteriori.json; do
-
-        # A priori is equal for all runs, convert once
-        if [ ! -e "$RESULTS_DIR/a_priori.csv" ]; then
-            inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
-                            --variable 'a_priori_2d' \
-                            --output "$RESULTS_DIR/a_priori.csv" \
-                            --json $RESULT_JSON
-        fi
-
         # Convert a posteriori to csv and plot
         RESULT_CSV="${RESULT_JSON%.*}".csv
-        RESULT_PNG="${RESULT_JSON%.*}".png
         inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
                         --variable 'a_posteriori_2d' \
                         --json $RESULT_JSON \
                         --output $RESULT_CSV
+    done
+fi
+
+
+
+if [ $RUN_PLOTS == 1 ]; then
+    for RESULT_JSON in $RESULTS_DIR/inversion_*_a_posteriori.json; do
+        RESULT_PNG="${RESULT_JSON%.*}".png
         inv_exec $SCRIPT_DIR/AshInv/Plot.py \
                         --plotsum=False \
                         --colormap birthe \
