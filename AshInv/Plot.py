@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 ##############################################################################
@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.colors import LinearSegmentedColormap, LogNorm, TwoSlopeNorm, SymLogNorm
+from matplotlib.colors import LinearSegmentedColormap, LogNorm
 import scipy.sparse
 import numpy as np
 import datetime
@@ -37,8 +37,9 @@ import json
 import os
 
 
+
 def makePlotFromJson(json_filename, outfile=None, **kwargs):
-    json_data = readJson(json_filename, **kwargs)
+    json_data = readJson(json_filename)
     fig = plotAshInv(json_data, **kwargs)
 
     if (outfile is not None):
@@ -51,12 +52,7 @@ def makePlotFromJson(json_filename, outfile=None, **kwargs):
     return fig
 
 
-def readJson(json_filename, 
-        prune=True, 
-        prune_zero=0, 
-        valid_times_min=None, 
-        valid_times_max=None,
-        **kwargs):
+def readJson(json_filename, prune=True, prune_zero=0):
     #Read data
     with open(json_filename, 'r') as infile:
         json_string = infile.read()
@@ -90,10 +86,8 @@ def readJson(json_filename,
     if (prune):
         valid_elevations = max(np.flatnonzero((json_data['a_priori'].max(axis=1) + json_data['a_posteriori'].max(axis=1)) > prune_zero)) + 1
         valid_times = np.flatnonzero((json_data['a_priori'].max(axis=0) + json_data['a_posteriori'].max(axis=0)) > prune_zero)
-        if valid_times_min is None:
-            valid_times_min = min(valid_times)
-        if valid_times_max is None:
-            valid_times_max = max(valid_times) + 1
+        valid_times_min = min(valid_times)
+        valid_times_max = max(valid_times) + 1
 
         json_data['a_priori'] = json_data['a_priori'][:valid_elevations,valid_times_min:valid_times_max]
         json_data['a_posteriori'] = json_data['a_posteriori'][:valid_elevations,valid_times_min:valid_times_max]
@@ -253,16 +247,13 @@ def plotAshInv(json_data,
         plt.legend()
 
     #Third subfigure (difference)
-    norm = TwoSlopeNorm(vmin=-1.0, vcenter=0, vmax=r_vmax)
-    #norm = SymLogNorm(linthresh=0.1, vmin=-1.0, vmax=r_vmax, base=10)
-    #norm = MidpointLogNorm(lin_thres=0.01, lin_scale=1.0, vmin=-1.0, vmax=10, base=10)
     diff = (json_data['a_posteriori']-json_data['a_priori']) / json_data['a_priori']
     plt.sca(axs[2])
     plt.title("(Inverted - A priori) / A priori")
     plt.imshow(diff, aspect='auto',
         interpolation='none',
         origin='lower',
-        cmap='bwr', norm=norm)
+        cmap='bwr', vmin=-r_vmax, vmax=r_vmax)
     plt.colorbar(orientation='horizontal', pad=0.15)
     plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
     plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
@@ -338,7 +329,7 @@ def downsample(arr, target, rebin_type='median'):
     return rebin(arr, target_size, rebin_type)
 
 
-def plotAshInvMatrix(matrix, fig=None, do_downsample=True, rebin_type='median'):
+def plotAshInvMatrix(matrix, fig=None, downsample=True, rebin_type='median'):
     if (fig is None):
         fig = plt.figure(figsize=(18, 18))
 
@@ -350,7 +341,7 @@ def plotAshInvMatrix(matrix, fig=None, do_downsample=True, rebin_type='median'):
     extent = [0, matrix.shape[1], matrix.shape[0], 0]
 
     m = matrix
-    if (do_downsample):
+    if (downsample):
         m = downsample(matrix, fig_size, rebin_type)
 
     #For plotting, force negative numbers to zero

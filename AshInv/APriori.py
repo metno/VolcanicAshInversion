@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 ##############################################################################
@@ -30,7 +30,6 @@ import pandas as pd
 import datetime
 import logging
 from netCDF4 import Dataset
-from dateutil.parser import isoparse
 import json
 
 from AshInv import Misc
@@ -157,16 +156,10 @@ if __name__ == "__main__":
     parser.add("--hybrid_levels_file", type=str, required=True, help="Vertical levels file")
     parser.add("--num_emission_levels", type=int, default=19, help="Number of emission levels to use (must match simulation)")
     parser.add("--a_priori_file", type=str, required=True, help="Output a priori file")
-    parser.add("--min_time", type=datetime.datetime.fromisoformat, default=datetime.datetime(1900,1,1), help="A priori values before this time is ignored")
-    parser.add("--max_time", type=datetime.datetime.fromisoformat, default=datetime.datetime(2100,1,1), help="A priori values after this time is ignored")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add("--plume_heights_file", type=str, help="Plume heights input file")
     group.add("--dat_file", type=str, help="Existing a priori dat file")
     args = parser.parse_args()
-    
-    #Convert min/max time to utc
-    args.max_time = args.max_time.astimezone(datetime.timezone.utc)
-    args.min_time = args.min_time.astimezone(datetime.timezone.utc)
 
     print("Arguments: ")
     print("=======================================")
@@ -203,8 +196,6 @@ if __name__ == "__main__":
             'hybrid_levels_file': args.hybrid_levels_file,
             'particle_density': args.particle_density,
             'fine_ash_fraction': args.fine_ash_fraction,
-            'min_time': args.min_time.isoformat(),
-            'max_time': args.max_time.isoformat()
         }
 
     if (args.plume_heights_file is not None):
@@ -212,26 +203,16 @@ if __name__ == "__main__":
                     args.a_priori_uncertainty,
                     args.plume_heights_file,
                     args.verbose)
+        output.update(a_priori)
     elif (args.dat_file  is not None):
         a_priori = aPrioriFromDatFile(output, args.dat_file)
+        output.update(a_priori)
     else:
         logger.error("No valid output!")
-        
-    logger.debug("Pruning a priori values")
-    emission_times = [isoparse(t).replace(tzinfo=datetime.timezone.utc) for t in a_priori['emission_times']]
-    valid = [i for i, t in enumerate(emission_times) if t >= args.min_time and t <= args.max_time]
-    a_priori['emission_times'] = [a_priori['emission_times'][i] for i in valid]
-    a_priori['a_priori_2d'] = a_priori['a_priori_2d'][valid, :]
-    a_priori['a_priori_2d_uncertainty'] = a_priori['a_priori_2d_uncertainty'][valid, :]
-    logger.debug("Removed {:d} of {:d} timesteps from a priori".format(len(emission_times) - len(valid), len(emission_times)))
-    
+
     logger.debug("Writing output to {:s}".format(args.a_priori_file))
-    output.update(a_priori)
     for key in output.keys():
         if isinstance(output[key], (np.ndarray, np.generic)):
             output[key] = output[key].tolist()
-    for key in output['args'].keys():
-        output['args'][key] = str(output['args'][key])
     with open(args.a_priori_file, 'w') as outfile:
         json.dump(output, outfile, indent=4)
-
