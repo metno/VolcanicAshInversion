@@ -31,12 +31,12 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 
 #Read internal config that sets some of the default parameters
-DEFAULTS_FILE="$(realpath "$SCRIPT_DIR/../internal/inversion_defaults.sh" || echo 'NONE')"
+DEFAULTS_FILE="$(realpath $SCRIPT_DIR/..)/internal/inversion_defaults.sh"
 if [[ -f "$DEFAULTS_FILE" ]]; then
     echo "Using defaults from $DEFAULTS_FILE"
     source $DEFAULTS_FILE
 else
-    echo "Warning: No default values found. Continue at your own risk"
+    echo "Warning: Defaults file $DEFAULTS_FILE does not exist. "
 fi
 
 
@@ -102,7 +102,7 @@ if [ "$CONF_DIR" == "NONE" ]; then
     exit -1
 fi
 if [ "$RUN_DIR" == "NONE" ]; then
-    RUN_DIR=$(realpath $SCRIPT_DIR/../output/${TAG}_$(date +"%Y%m%dT%H%MZ"))
+    RUN_DIR=$(realpath $SCRIPT_DIR/..)/output/${TAG}_$(date +"%Y%m%dT%H%MZ")
     echo "INFO: Using output directory '$RUN_DIR'"
     if [ -d $RUN_DIR ]; then
         echo "ERROR: Output directory exists!"
