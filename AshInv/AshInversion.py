@@ -482,14 +482,14 @@ class AshInversion():
                         Q_c_min_index = indices.min()
                         Q_c_obs_counter = 0
                         
-                        #Check if we have too small a matrix, and resize accordingly
+                        #Check if we have too small / large a matrix, and resize accordingly
                         row_width = indices.max() - indices.min()
-                        if (row_width >= Q_c.shape[1]):
+                        if (row_width >= Q_c.shape[1] or Q_c.shape[1] >= 1.2*row_width):
                             #Increase to next power of two
                             #new_size = 1
                             #while new_size < row_width:
                             #    new_size = new_size << 1
-                            new_size = int(row_width*1.1) #Increase by 10% of row width
+                            new_size = int(row_width*1.1) #Increase to 10% more than actual row width
                             self.logger.info("Row width too large, resizing Q_c from {:d} to {:d} columns".format(Q_c.shape[1], new_size))
                             Q_c = np.zeros((Q_c.shape[0], new_size))
                             
