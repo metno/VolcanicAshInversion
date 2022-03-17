@@ -227,14 +227,17 @@ if [ $RUN_INVERSION == 1 ]; then
 fi
 
 
-if [ $RUN_A_POSTERIORI_CSV == 1 ]; then
-    inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
-                    --variable 'a_priori_2d' \
-                    --output "$RESULTS_DIR/a_priori.csv" \
-                    --json $RESULT_JSON
-                    
+if [ $RUN_A_POSTERIORI_CSV == 1 ]; then                    
     for RESULT_JSON in $RESULTS_DIR/inversion_*_a_posteriori.json; do
-        # Convert a posteriori to csv and plot
+        # Convert a priori once
+        if [ ! -f "$RESULTS_DIR/a_priori.csv" ]; then
+            inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
+                            --variable 'a_priori_2d' \
+                            --output "$RESULTS_DIR/a_priori.csv" \
+                            --json $RESULT_JSON
+        fi
+    
+        # Convert a posteriori to csv
         RESULT_CSV="${RESULT_JSON%.*}".csv
         inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
                         --variable 'a_posteriori_2d' \
