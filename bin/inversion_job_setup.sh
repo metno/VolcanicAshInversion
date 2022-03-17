@@ -4,6 +4,7 @@
 #                                                                            #
 #    This file is part of PVAI - Python Volcanic Ash Inversion.              #
 #                                                                            #
+#    Copyright 2021, 2022, André R. Brodtkorb <andre.brodtkorb@oslomet.no>   #
 #    Copyright 2019, 2020 The Norwegian Meteorological Institute             #
 #               Authors: André R. Brodtkorb <andreb@met.no>                  #
 #                                                                            #
@@ -54,7 +55,7 @@ RANDOM_SEED=$(date +"%s")
 
 function usage {
     echo "This program sets up the ash inversion procedure and submits a job."
-    echo "Typical runtime is ~30 minutes depending on complexity of the inversion job"
+    echo "Typical runtime depends on the complexity of the inversion job"
     echo ""
     echo "Usage: $0 [options]"
     echo "Options: "
@@ -101,7 +102,7 @@ if [ "$CONF_DIR" == "NONE" ]; then
     exit -1
 fi
 if [ "$RUN_DIR" == "NONE" ]; then
-    RUN_DIR=$SCRIPT_DIR/output/${TAG}_$(date +"%Y%m%dT%H%MZ")
+    RUN_DIR=$(realpath $SCRIPT_DIR/../output/${TAG}_$(date +"%Y%m%dT%H%MZ"))
     echo "INFO: Using output directory '$RUN_DIR'"
     if [ -d $RUN_DIR ]; then
         echo "ERROR: Output directory exists!"

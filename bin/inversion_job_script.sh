@@ -4,6 +4,7 @@
 #                                                                            #
 #    This file is part of PVAI - Python Volcanic Ash Inversion.              #
 #                                                                            #
+#    Copyright 2021, 2022, André R. Brodtkorb <andre.brodtkorb@oslomet.no>   #
 #    Copyright 2019, 2020 The Norwegian Meteorological Institute             #
 #               Authors: André R. Brodtkorb <andreb@met.no>                  #
 #                                                                            #
@@ -30,9 +31,8 @@ set -o pipefail # Enable fail error codes on pipe to tee
 
 #Double check that things appear to be sensible before continuing
 if [[ -z "$INVERSION_ENVIRONMENT_SETUP" ]]; then
-    echo "ERROR: Environment has not been set up correctly"
-    echo "This script is not intended to be run directly"
-    echo "Please set up environment properly first."
+    echo "ERROR: This script is not intended to be called."
+    echo "ERROR: Plase use inversion_job_setup.sh to set up an inversion job"
     exit -1
 fi
 
@@ -144,7 +144,7 @@ function cleanup_job {
 trap cleanup_job ERR EXIT KILL SIGTERM
 
 #Set python path. If PYTHONPATH is empty do not add leading :
-export PYTHONPATH=${PYTHONPATH:+${PYTHONPATH}:}$SCRIPT_DIR
+ASHINV_PYTHONPATH=$(realpath "$SCRIPT_DIR/..")
 
 
 
@@ -176,7 +176,7 @@ fi
 
 if [ $RUN_A_PRIORI == 1 ]; then
     # Create a priori information from plume heights estimate
-    inv_exec $SCRIPT_DIR/AshInv/APriori.py \
+    inv_exec $ASHINV_PYTHONPATH/AshInv/APriori.py \
                         --config "$RUN_CONF_A_PRIORI" \
                         --a_priori_file "$RESULTS_DIR/a_priori.json"
     inv_exec echo "INFO: Done creating a priori values"
@@ -185,7 +185,7 @@ fi
 
 if [ $RUN_MATCH_FILES == 1 ]; then
     #Match observations with simulation files
-    inv_exec $SCRIPT_DIR/AshInv/MatchFiles.py \
+    inv_exec $ASHINV_PYTHONPATH/AshInv/MatchFiles.py \
                         --config "$RUN_CONF_MATCH_FILES" \
                         --simulation_csv "$RUN_SIMULATIONS" \
                         --observation_csv "$RUN_OBSERVATIONS" \
@@ -206,7 +206,7 @@ if [ $RUN_INVERSION == 1 ]; then
     fi
 
     #Run inversion (with progress file)
-    inv_exec $SCRIPT_DIR/AshInv/AshInversion.py \
+    inv_exec $ASHINV_PYTHONPATH/AshInv/AshInversion.py \
                     --config "$RUN_CONF_INVERSION" \
                     --progress_file "$RUN_DIR/progress.npz" \
                     --matched_files "$RUN_DIR/matched_files/matched_files.csv" \
@@ -231,7 +231,7 @@ if [ $RUN_A_POSTERIORI_CSV == 1 ]; then
     for RESULT_JSON in $RESULTS_DIR/inversion_*_a_posteriori.json; do
         # Convert a priori once
         if [ ! -f "$RESULTS_DIR/a_priori.csv" ]; then
-            inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
+            inv_exec $ASHINV_PYTHONPATH/AshInv/APosteriori.py \
                             --variable 'a_priori_2d' \
                             --output "$RESULTS_DIR/a_priori.csv" \
                             --json $RESULT_JSON
@@ -239,7 +239,7 @@ if [ $RUN_A_POSTERIORI_CSV == 1 ]; then
     
         # Convert a posteriori to csv
         RESULT_CSV="${RESULT_JSON%.*}".csv
-        inv_exec $SCRIPT_DIR/AshInv/APosteriori.py \
+        inv_exec $ASHINV_PYTHONPATH/AshInv/APosteriori.py \
                         --variable 'a_posteriori_2d' \
                         --json $RESULT_JSON \
                         --output $RESULT_CSV
@@ -251,7 +251,7 @@ fi
 if [ $RUN_PLOTS == 1 ]; then
     for RESULT_JSON in $RESULTS_DIR/inversion_*_a_posteriori.json; do
         RESULT_PNG="${RESULT_JSON%.*}".png
-        inv_exec $SCRIPT_DIR/AshInv/Plot.py \
+        inv_exec $ASHINV_PYTHONPATH/AshInv/Plot.py \
                         --plotsum=False \
                         --colormap birthe \
                         --usetex=False \

@@ -4,6 +4,7 @@
 #                                                                            #
 #    This file is part of PVAI - Python Volcanic Ash Inversion.              #
 #                                                                            #
+#    Copyright 2021, 2022, André R. Brodtkorb <andre.brodtkorb@oslomet.no>   #
 #    Copyright 2019, 2020 The Norwegian Meteorological Institute             #
 #               Authors: André R. Brodtkorb <andreb@met.no>                  #
 #                                                                            #
@@ -25,8 +26,11 @@
 #set -x #echo commands (useful for debugging)
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "This script is used to set up the conda environment and is called"
+    echo "automatically by the inversion procedure."
+    echo ""
     echo "ERROR: This script is not intended to be executed."
-    echo "INFO: Execute 'source ${BASH_SOURCE[0]}' instead"
+    echo "INFO: Execute 'source ${BASH_SOURCE[0]}' instead (if you know what you are doing)"
     exit -1
 fi
 
@@ -85,6 +89,9 @@ else
     else
         echo "INFO: use cleanup_conda to reset shell"
     fi
+    
+    #Add ash inversion package to pythonpath
+    export PYTHONPATH=${PYTHONPATH:+${PYTHONPATH}:}$(realpath "$SCRIPT_DIR/..")
 
     export CONDA_INITIALIZED=1
 fi

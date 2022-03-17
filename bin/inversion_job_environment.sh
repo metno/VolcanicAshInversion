@@ -4,6 +4,7 @@
 #                                                                            #
 #    This file is part of PVAI - Python Volcanic Ash Inversion.              #
 #                                                                            #
+#    Copyright 2021, 2022, André R. Brodtkorb <andre.brodtkorb@oslomet.no>   #
 #    Copyright 2019, 2020 The Norwegian Meteorological Institute             #
 #               Authors: André R. Brodtkorb <andreb@met.no>                  #
 #                                                                            #
@@ -58,6 +59,13 @@
 
 ## Standard error logfile
 #$ -e "@RUN_DIR@/cerr.log"
+
+#Check that this script has been set  up properly
+if [[ ! -d "@SCRIPT_DIR@" ]]; then
+    echo "ERROR: This script is not intended to be called."
+    echo "ERROR: Plase use inversion_job_setup.sh to set up an inversion job"
+    exit -1
+fi
 
 ######################################
 # Stop on first error unless sourced #
