@@ -286,10 +286,13 @@ class AshInversion():
         self.Q = np.zeros((num_emissions, num_emissions), dtype=np.float64)
         self.B = np.zeros((num_emissions), dtype = np.float64)
         
-        #For faster processing - chunk 
-        num_obs_per_update = 1000
-        Q_c = np.zeros((num_obs_per_update, num_emissions), dtype=np.float64)
-        sum_counter = 0
+        #For faster processing - use blocked matrix computations
+        #Q_c has the shape (rows, cols) which is a subset of M (num_obs, num_emissions)
+        #FIXME: This is just hardcoded at the moment to 2048x2048. 
+        #If the maximum widht of any row in M becomes larger than this, the inversion will not be able to complete.
+        Q_c = np.zeros((2048, 2048), dtype=np.float64)
+        Q_c_min_index = -1
+        Q_c_obs_counter = 0
 
         #Right hand sides
         self.y_0 = np.zeros((total_num_obs), dtype=np.float64)
@@ -309,6 +312,8 @@ class AshInversion():
             current_index = extra_data['current_index']
             nnz_counter = extra_data['nnz_counter']
             Q_c = extra_data['Q_c']
+            Q_c_min_index = extra_data['Q_c_min_index']
+            Q_c_obs_counter = extra_data['Q_c_obs_counter']
 
         start_assembly = time.time()
         next_save_time = time.time()
@@ -404,25 +409,38 @@ class AshInversion():
                 timers['start']['asm3'] = 0
                 timers['end']['asm3'] = 0
                 
-            def assemble(Q_c):
+            def assemble(Q_c, Q_min_index, Q_c_obs_counter):
                 """Helper function to avoid code duplication"""
-                timers['start']['asm1'] += time.time()
+                
+                #Compute indices of blocked Q_c matrix and the corresponding part of Q
+                #Numpy matrices: (rows, cols)
+                #Q_c has the shape (Q_c_obs_counter, N) which is a subset of M (num_obs, num_emissions)
+                #Q_c will be assembled into Q starting at [Q_c_min_index, Q_c_min_index]
+                #Q has the shape (num_emissions, num_emissions)
+                Q_max_index = min(self.Q.shape[1], Q_min_index + Q_c.shape[1])
+                Q_c_width = Q_max_index - Q_min_index
+                
+                #Pick out part of Q_c that fits with Q (only relevant close to end of assembly, 
+                #when Q_c may be outside of Q
+                R = Q_c[:Q_c_obs_counter,:Q_c_width]
+                
                 #Scale Q matrix
-                Q_c = Q_c*scale_emission
+                R = R*scale_emission
+                
+                #Precompute [M^T sigma_o^-2]
+                #FIXME: The speed of this can be improved.
+                sigma_o_m2 = np.diag(1/(self.sigma_o[obs_counter-Q_c_obs_counter:obs_counter]**2))
+                R_sigma_om2 = np.matmul(R.T, sigma_o_m2)
+                
+                #Precompute Y=[y_0 - M x_a]
+                Y=self.y_0[obs_counter-Q_c_obs_counter:obs_counter] - np.matmul(R, self.x_a[Q_min_index:Q_max_index])
 
-                #Precompute matrices
-                sigma_o_m2 = np.diag(1/(self.sigma_o[obs_counter-num_obs_per_update:obs_counter]**2))
-                Q_c_sigma_om2 = np.matmul(Q_c.T, sigma_o_m2)
-                timers['end']['asm1'] += time.time()
+                #Compute [Q = M^T sigma_o^-2 M]
+                self.Q[Q_min_index:Q_max_index, Q_min_index:Q_max_index] += np.matmul(R_sigma_om2, R)
 
-                timers['start']['asm2'] += time.time()
-                #Compute matrix product Q = M^T sigma_o^-2 M without storing M
-                self.Q += np.matmul(Q_c_sigma_om2, Q_c)
-
-                #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                self.B += np.matmul(Q_c_sigma_om2, self.y_0[obs_counter-num_obs_per_update:obs_counter] - np.matmul(Q_c, self.x_a))
+                #Compute [B = M^t sigma_o^-2 (y_0 - M x_a)]
+                self.B[Q_min_index:Q_max_index] += np.matmul(R_sigma_om2, Y)
                 Q_c.fill(0.0)
-                timers['end']['asm2'] += time.time()
                 
 
             #  Assemble system matrix
@@ -446,17 +464,31 @@ class AshInversion():
                     altitude_ranges = [slice(0, altitude_max), slice(altitude_max, row.num_altitudes)]
 
                 for altitude_range in altitude_ranges:
-                    #Assemble the Q_c buffer into Q and B.
-                    if (obs_counter > 0 and obs_counter % num_obs_per_update == 0):
-                        assemble(Q_c)
-                        
-                    #Insert simulation values into the Q_c matrix
                     timers['start']['asm0'] += time.time()
+                    #Read the indices
                     indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
-                    vals = sim[o, time_index[0], altitude_range].ravel(order='C')
-                    Q_c[obs_counter % num_obs_per_update, indices] = vals
+                    
+                    #Update location of Q_c block
+                    if (Q_c_min_index < 0):
+                        Q_c_min_index = indices.min()
                     timers['end']['asm0'] += time.time()
+                    
+                    #Assemble Q_c into Q and B when needed.
+                    timers['start']['asm1'] += time.time()
+                    if (Q_c_obs_counter >= Q_c.shape[0] or (indices.max() - Q_c_min_index) >= Q_c.shape[1]):
+                        self.logger.debug("Assembling. Total obs={:d}, block obs={:d}, min index={:d}, max index={:d}, width={:d}".format(obs_counter, Q_c_obs_counter, indices.min(), indices.max(), indices.max()-Q_c_min_index))
+                        assemble(Q_c, Q_c_min_index, Q_c_obs_counter)
+                        Q_c_min_index = indices.min()
+                        Q_c_obs_counter = 0
+                    timers['end']['asm1'] += time.time()
+                    
+                    timers['start']['asm2'] += time.time()                        
+                    #Read the values and assemble into the Q_c block matrix
+                    vals = sim[o, time_index[0], altitude_range].ravel(order='C')
+                    Q_c[Q_c_obs_counter, indices - Q_c_min_index] = vals                    
+                    timers['end']['asm2'] += time.time()
 
+                    #Store the full M matrix (mostly for debugging and sanity checking)
                     if (store_full_matrix):
                         timers['start']['asm3'] += time.time()
                         nnz_next = nnz_counter+vals.size
@@ -467,21 +499,26 @@ class AshInversion():
                         timers['end']['asm3'] += time.time()
 
                     obs_counter = obs_counter+1
+                    Q_c_obs_counter = Q_c_obs_counter+1
 
             #Asseble last set of Q_c observations
             last_row = row_index+1 == matched_files_df.shape[0]
             if (last_row):
-                assemble(Q_c)
+                assemble(Q_c, Q_c_min_index, Q_c_obs_counter)
+                Q_c_min_index = -1
+                Q_c_obs_counter = 0
 
             timers['end']['asm'] = time.time()
             timers['end']['tot'] = time.time()
 
-            #Save progress every 5 minutes (for restarting jobs)
+            #Save progress every 5 minutes (for restarting aborted jobs)
             if ((progress_file is not None) and (time.time() > next_save_time)):
                 self.logger.info("Writing progress file for restarting")
                 current_index = row_index+1
                 extra_data =  {
                     'Q_c': Q_c,
+                    'Q_c_min_index': Q_c_min_index,
+                    'Q_c_obs_counter': Q_c_obs_counter,
                     'obs_counter': obs_counter,
                     'n_removed': n_removed,
                     'current_index': current_index,
