@@ -288,9 +288,10 @@ class AshInversion():
         
         #For faster processing - use blocked matrix computations
         #Q_c has the shape (rows, cols) which is a subset of M (num_obs, num_emissions)
-        #FIXME: This is just hardcoded at the moment to 2048x2048. 
-        #If the maximum widht of any row in M becomes larger than this, the inversion will not be able to complete.
-        Q_c = np.zeros((2048, 2048), dtype=np.float64)
+        #FIXME: This is just hardcoded at the moment to 2048x1. 
+        #The inversion procedure then re-allocates this matrix to fit with the actual width 
+        #of the rows of M.
+        Q_c = np.zeros((2048, 1), dtype=np.float64)
         Q_c_min_index = -1
         Q_c_obs_counter = 0
 
@@ -480,6 +481,18 @@ class AshInversion():
                         assemble(Q_c, Q_c_min_index, Q_c_obs_counter)
                         Q_c_min_index = indices.min()
                         Q_c_obs_counter = 0
+                        
+                        #Check if we have too small a matrix, and resize accordingly
+                        row_width = indices.max() - indices.min()
+                        if (row_width >= Q_c.shape[1]):
+                            #Increase to next power of two
+                            #new_size = 1
+                            #while new_size < row_width:
+                            #    new_size = new_size << 1
+                            new_size = int(row_width*1.1) #Increase by 10% of row width
+                            self.logger.info("Row width too large, resizing Q_c from {:d} to {:d} columns".format(Q_c.shape[1], new_size))
+                            Q_c = np.zeros((Q_c.shape[0], new_size))
+                            
                     timers['end']['asm1'] += time.time()
                     
                     timers['start']['asm2'] += time.time()                        
