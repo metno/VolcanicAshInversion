@@ -59,7 +59,7 @@ else
 
     if [[ $(conda activate $CONDA_ENV_NAME && echo "SUCCESS") != SUCCESS ]]; then
         echo "ERROR: Conda environment has not been set up correctly! Setting up automatically"
-        conda create --name "$CONDA_ENV_NAME" --file "$SCRIPT_DIR/ash_inv.yml"
+        conda env create --name "$CONDA_ENV_NAME" --file "$SCRIPT_DIR/../ash_inv.yml"
     fi
 
     # Setup conda environment
