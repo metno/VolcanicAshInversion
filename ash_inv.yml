@@ -19,6 +19,7 @@ dependencies:
   - joblib=1.1.0
   - pytest=6.2.5
   - pytest-dependency=0.5.1
+  - zenodo_get
 
 # This file may be used to create an environment using:
 # $ conda create --prefix "`pwd`/conda_ash_inv" --file ash_inv.yml

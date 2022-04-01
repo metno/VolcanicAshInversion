@@ -21,6 +21,7 @@
 #                                                                            #
 ##############################################################################
 
+set -e
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 ASHINV_CLEANUP=1 source "$SCRIPT_DIR/inversion_job_conda.sh"
 cd $SCRIPT_DIR/../AshInv/

@@ -66,30 +66,10 @@ INFO: Resetting path
 
 ## Downloading data
 
-The data is arcived on Zenodo, and can be downloaded using zenodo_get. Start by installing zenodo_get:
-* In python using PiP `pip install zenodo_get`
-* or using conda `conda install zenodo_get` 
-
-When you have installed zenodo_get, you can download the data for the forward simulations
+The data for forward simulations and satellite observations of the Eyjafjalla 2010 eruption is arcived on Zenodo, and can be downloaded automatically to the correct location using the following script:
 ```
 cd VolcanicAsh
-mkdir forward_runs
-cd forward_runs
-
-#Download forward runs
-zenodo_get 3818196 
-```
-and for the satellite observations:
-```
-cd VolcanicAsh
-mkdir satellite
-cd satellite
-
-#Download satellite observations
-zenodo_get 3855526
-
-#Unzip one of te satellite observation datasets
-tar jxvf lognormal_1_5.tar.bz2
+VolcanicAshInversion/bin/inversion_download_eyjafjalla.sh
 ```
 
 ## Setting up an inversion job
