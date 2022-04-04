@@ -1,9 +1,10 @@
+#!/bin/bash
+
 ##############################################################################
 #                                                                            #
 #    This file is part of PVAI - Python Volcanic Ash Inversion.              #
 #                                                                            #
-#    Copyright 2019, 2020 The Norwegian Meteorological Institute             #
-#               Authors: André R. Brodtkorb <andreb@met.no>                  #
+#    Copyright 2022, André R. Brodtkorb <andre.brodtkorb@oslomet.no>         #
 #                                                                            #
 #    PVAI is free software: you can redistribute it and/or modify            #
 #    it under the terms of the GNU General Public License as published by    #
@@ -20,13 +21,7 @@
 #                                                                            #
 ##############################################################################
 
-#particle_density = 2.75e3
-#fine_ash_fraction = 0.1
-#a_priori_uncertainty = 0.5
-volcano_altitude = 1666
-hybrid_levels_file = @SCRIPT_DIR@/../input_data/Vertical_levels_22_650m.txt
-plume_heights_file = @RUN_DIR@/plume_heights_@TAG@.csv
-#dat_file = @RUN_DIR@/a_priori_@TAG@.dat
-
-min_time = 2010-04-14T00:00+00:00
-max_time = 2010-04-17T21:00+00:00
+set -e
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+ASHINV_CLEANUP=1 source "$SCRIPT_DIR/inversion_job_conda.sh"
+$SCRIPT_DIR/../AshInv/MatchFiles.py $*

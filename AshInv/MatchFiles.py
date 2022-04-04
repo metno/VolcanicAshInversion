@@ -68,6 +68,21 @@ class MatchFiles:
             self.obs_files.filename = self.obs_files.filename.apply(lambda x: os.path.join(satellite_observations_basedir, x))
         else:
             self.obs_files.filename = self.obs_files.filename.apply(lambda x: os.path.join(os.path.dirname(satellite_observations), x))
+            
+        #Remove non-existing files
+        sim_files_missing = self.sim_files['filename'].apply(os.path.exists) == False
+        if (np.any(sim_files_missing)):
+            self.logger.warning("Missing simulation files:")
+            self.logger.warning(self.sim_files[sim_files_missing].to_string())
+            self.sim_files.drop(self.sim_files[sim_files_missing].index, inplace=True)
+            self.sim_files = self.sim_files.reset_index(drop=True)
+            
+        obs_files_missing = self.obs_files['filename'].apply(os.path.exists)
+        if (np.any(obs_files_missing)):
+            self.logger.warning("Missing observation files:")
+            self.logger.warning(self.obs_files[obs_files_missing].to_string())
+            self.obs_files.drop(self.obs_files[obs_files_missing == False].index, inplace=True)
+            self.obs_files = self.obs_files.reset_index(drop=True)
 
         if (self.verbose):
             self.logger.debug("Simulation files: " + pprint.pformat(self.sim_files))
@@ -650,7 +665,7 @@ class MatchFiles:
 
 
         # Get actual data
-        with Dataset(filename, mode='r') as nc_file:
+        with Dataset(filename, mode='r') as nc_file:            
             if ('longitude' in nc_file.variables.keys()):
                 lon = nc_file['longitude'][:]
                 lat = nc_file['latitude'][:]
@@ -661,7 +676,22 @@ class MatchFiles:
                 raise RuntimeError("No supported spatial dimension")
 
             try:
-                obs = nc_file[netcdf_observation_varname][:,:]
+                obs_var = nc_file[netcdf_observation_varname]
+            
+                if ("valid_min" in obs_var.__dict__ and hasattr(obs_var.valid_min, '__len__') and obs_var.valid_min[-1] == "f"):
+                    self.logger.warning("Observation file has wrong valid_min (not parseable as float...). Trying to fix")
+                    my_valid_min = float(obs_var.valid_min[:-1])
+                    nc_file.set_auto_mask(False)
+                    obs = obs_var[:,:]
+                    nc_file.set_auto_mask(True)
+                    
+                    mask = (obs <= my_valid_min)
+                    obs = np.ma.masked_array(obs, mask)
+                    self.logger.warning("Result has {:d} masked and {:d} unmasked values".format(np.count_nonzero(mask), np.count_nonzero(mask==False)))
+                else:
+                    obs = obs_var[:,:]
+
+            
                 if (netcdf_observation_altitude_varname is not None):
                     obs_alt = nc_file[netcdf_observation_altitude_varname][:,:]
                 else:
