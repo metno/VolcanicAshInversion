@@ -30,6 +30,8 @@ import logging
 import pprint
 import time
 from netCDF4 import Dataset, num2date
+from pyproj import CRS
+from pyproj import Proj
 import os
 import re
 import json
@@ -91,6 +93,9 @@ class MatchFiles:
 
     def match_files(self, output_dir,
                     min_days=0, max_days=6,
+                    volcano_lat=64.8,
+                    volcano_lon=-18.3,
+                    max_dist=1000,
                     mask_sim=True,
                     obs_flag_max=1.95,
                     zero_thinning=0.7,
@@ -112,7 +117,7 @@ class MatchFiles:
         mask_sim : bool, optional
             Mask the unused simulation data in output (saves space). The default is True.
         obs_flag_max - Remove observations with an as flag higher than this (0=no ash, 1=ash, 2=don't know)"
-        zero_thinning - Ratio of zero observations to keep
+        zero_thinning - Ratio of zero observations to remove
         obs_zero - Observations smaller than this are treated as zero
 
         Returns
@@ -241,6 +246,24 @@ class MatchFiles:
             obs_lon, obs_lat = np.meshgrid(obs_lon, obs_lat)
             obs_lon = obs_lon[mask[0], mask[1]]
             obs_lat = obs_lat[mask[0], mask[1]]
+
+            #Compute distance from volcano and remove those that are too far away
+            crs = CRS.from_epsg(32628)
+            proj = Proj(crs)
+            x, y = proj(*np.meshgrid(obs_lon, obs_lat))
+            x0, y0 = proj(volcano_lon, volcano_lat)
+            r = np.sqrt(np.pow(x-x0,2)+np.pow(y-y0, 2))
+            keep = (r < max_dist)
+            n_remove_dist = keep.size - np.count_nonzero(keep)
+            if (n_remove_dist > 0):
+                obs = obs[keep]
+                obs_flag = obs_flag[keep]
+                if (obs_alt is not None):
+                    obs_alt = obs_alt[keep]
+                sim = sim[keep, :, :]
+                obs_lon = obs_lon[keep]
+                obs_lat = obs_lat[keep]
+
 
             #Remove observations with high ash flag (uncertain)
             keep = (obs_flag < obs_flag_max)
@@ -866,6 +889,16 @@ if __name__ == "__main__":
     parser = configargparse.ArgParser(description='Match observations and simulations.')
     parser.add("--verbose", action="store_true", help="Enable verbose mode")
     parser.add("-c", "--config", is_config_file=True, help="config file which specifies options (commandline overrides)")
+    parser.add('--min_age', type=float, default=0,
+                        help='Minimum time difference between simulation and observation', required=False)
+    parser.add('--max_age', type=float, default=6,
+                        help='Maximum time difference between simulation and observation', required=False)
+    parser.add('--max_dist', type=float, default=1000,
+                        help='Maximum distance (kilometers) from volcano for simulation and observations', required=False)
+    parser.add('--volcano_lat', type=float, default=64.8,
+                        help='Volcano latitude', required=False)
+    parser.add('--volcano_lon', type=float, default=-18.3,
+                        help='Volcano longitude', required=False)
     parser.add('--simulation_csv', type=str,
                         help='CSV-file with EEMEP simulation runs', required=True)
     parser.add('--simulation_basedir', type=str,
@@ -881,7 +914,7 @@ if __name__ == "__main__":
     parser.add("--obs_flag_max", type=float, default=1.95,
                         help="Discard observations with an AF flag greater than this")
     parser.add("--zero_thinning", type=float, default=0.25,
-                        help="Fraction of zero observations to keep")
+                        help="Fraction of zero observations to remove")
     parser.add("--obs_zero", type=float, default=1.0e-5,
                         help="Observations less than this treated as zero")
     parser.add("--dummy_observation_json", type=str,
@@ -928,6 +961,11 @@ if __name__ == "__main__":
                    satellite_observations_basedir=args.observation_basedir,
                    verbose=args.verbose)
     match.match_files(output_dir=args.output_dir,
+                      max_days=args.max_days, 
+                      min_days=args.min_days,
+                      volcano_lat=args.volcano_lat,
+                      volcano_lon=args.volcano_lon,
+                      max_dist=args.max_dist,
                       mask_sim=args.no_mask_sim,
                       obs_flag_max=args.obs_flag_max,
                       zero_thinning=args.zero_thinning,
