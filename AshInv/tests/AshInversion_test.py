@@ -42,7 +42,7 @@ def test_APriori():
         if os.path.exists(f):
             os.remove(f)
     
-    subprocess.check_call([script, 
+    subprocess.check_call(["python", script, 
                            "--volcano_altitude", "1666", 
                            "--hybrid_levels_file", hybrid_levels,
                            "--plume_heights_file", plume_heights,
@@ -80,7 +80,7 @@ def test_MatchFiles():
         if os.path.exists(f):
             os.remove(f)
     
-    subprocess.check_call([script, 
+    subprocess.check_call(["python", script, 
                            "--zero_thinning", "0.75", 
                            "--obs_zero", "1.0e-5", 
                            "--obs_flag_max", "1.95", 
@@ -138,7 +138,7 @@ def test_AshInversion():
         if os.path.exists(f):
             os.remove(f)
     
-    subprocess.check_call([script, 
+    subprocess.check_call(["python", script, 
                            "--matched_files", matched_files,
                            "--a_priori_file", a_priori_file,
                            "--output_dir", datapath,
