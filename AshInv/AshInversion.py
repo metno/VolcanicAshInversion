@@ -10,7 +10,7 @@
 #                                                                            #
 #    PVAI is free software: you can redistribute it and/or modify            #
 #    it under the terms of the GNU General Public License as published by    #
-#    the Free Software Foundation, either version 2 of the License, or       #
+#    the Free Software Foundation, evither version 2 of the License, or      #
 #    (at your option) any later version.                                     #
 #                                                                            #
 #    PVAI is distributed in the hope that it will be useful,                 #
@@ -476,14 +476,14 @@ class AshInversion():
                     
                     #Assemble Q_c into Q and B when needed.
                     timers['start']['asm1'] += time.time()
-                    if (Q_c_obs_counter >= Q_c.shape[0] or (indices.max() - Q_c_min_index) >= Q_c.shape[1]):
+                    if (Q_c_obs_counter >= Q_c.shape[0] or (indices.max() - Q_c_min_index) >= Q_c.shape[1] or (indices.min() - Q_c_min_index) < 0):
                         self.logger.debug("Assembling. Total obs={:d}, block obs={:d}, min index={:d}, max index={:d}, width={:d}".format(obs_counter, Q_c_obs_counter, indices.min(), indices.max(), indices.max()-Q_c_min_index))
                         assemble(Q_c, Q_c_min_index, Q_c_obs_counter)
                         Q_c_min_index = indices.min()
                         Q_c_obs_counter = 0
                         
                         #Check if we have too small / large a matrix, and resize accordingly
-                        row_width = indices.max() - indices.min()
+                        row_width = indices.max() - Q_c_min_index
                         if (row_width >= Q_c.shape[1] or Q_c.shape[1] >= 1.2*row_width):
                             #Increase to next power of two
                             #new_size = 1
@@ -498,7 +498,7 @@ class AshInversion():
                     timers['start']['asm2'] += time.time()                        
                     #Read the values and assemble into the Q_c block matrix
                     vals = sim[o, time_index[0], altitude_range].ravel(order='C')
-                    Q_c[Q_c_obs_counter, indices - Q_c_min_index] = vals                    
+                    Q_c[Q_c_obs_counter, indices - Q_c_min_index] = vals
                     timers['end']['asm2'] += time.time()
 
                     #Store the full M matrix (mostly for debugging and sanity checking)
