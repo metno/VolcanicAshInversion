@@ -122,7 +122,7 @@ def saveFig(filename, fig, metadata):
         pdf.savefig(fig, bbox_inches='tight', pad_inches=0)
         
         
-def getColorMap(colormap):
+def getColorMap(colormap, bins=256):
     #If we already have a colormap
     if (not isinstance(colormap, str)):
         return colormap
@@ -136,6 +136,14 @@ def getColorMap(colormap):
     ]
     if (colormap == 'default'):
         pass
+    elif (colormap == 'ippc'):
+        colors = [
+            (0.0/4, (1.0, 1.0, 1.0)), #0-0.2 g/m2 white
+            (0.2/4, (0.498, 0.996, 0.996)), #0.2-2.0 g/m2 turquoise
+            (2.0/4, (0.573, 0.58, 0.592)), #2.0-4.0 g/m2 gray
+            (4.0/4, (0.875, 0.012, 0.012)) # >4.0 g/m2 red
+        ]
+        bins = 5
     elif (colormap == 'alternative'):
         colors = [
             (0.0, (1.0, 1.0, 0.6)),
@@ -169,7 +177,7 @@ def getColorMap(colormap):
         # Assume this is a standard matplotlib colormap name
         return colormap
         
-    cm = LinearSegmentedColormap.from_list('ash', colors, N=256)
+    cm = LinearSegmentedColormap.from_list('ash', colors, N=bins)
     cm.set_bad(alpha = 0.0)
 
     return cm
