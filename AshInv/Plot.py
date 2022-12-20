@@ -122,7 +122,7 @@ def saveFig(filename, fig, metadata):
         pdf.savefig(fig, bbox_inches='tight', pad_inches=0)
         
         
-def getColorMap(colormap):
+def getColorMap(colormap, bins=256):
     #If we already have a colormap
     if (not isinstance(colormap, str)):
         return colormap
@@ -136,6 +136,14 @@ def getColorMap(colormap):
     ]
     if (colormap == 'default'):
         pass
+    elif (colormap == 'ippc'):
+        colors = [
+            (0.0/4, (1.0, 1.0, 1.0)), #0-0.2 g/m2 white
+            (0.2/4, (0.498, 0.996, 0.996)), #0.2-2.0 g/m2 turquoise
+            (2.0/4, (0.573, 0.58, 0.592)), #2.0-4.0 g/m2 gray
+            (4.0/4, (0.875, 0.012, 0.012)) # >4.0 g/m2 red
+        ]
+        bins = 5
     elif (colormap == 'alternative'):
         colors = [
             (0.0, (1.0, 1.0, 0.6)),
@@ -169,7 +177,7 @@ def getColorMap(colormap):
         # Assume this is a standard matplotlib colormap name
         return colormap
         
-    cm = LinearSegmentedColormap.from_list('ash', colors, N=256)
+    cm = LinearSegmentedColormap.from_list('ash', colors, N=bins)
     cm.set_bad(alpha = 0.0)
 
     return cm
@@ -182,26 +190,14 @@ def npTimeToStr(np_time, fmt="%Y-%m-%d %H:%M"):
 
 def plotEmissions(json_data,
                 dataset,
-                unit="tg",
                 colormap='default',
+                unit='tg',
                 axis_date_format="%d %b\n%H:%M",
                 y_max=None,
                 usetex=True,
                 plotsum=True,
                 **kwargs,
             ):
-    if (unit == 'tg'):
-        pass
-    elif (unit == 'kg/(m*s)'):
-        # The setup is to emit 1 tg over three hours for each level
-        # Converting this to kg / (m * s)
-        duration = np.diff(json_data['emission_times'])/np.timedelta64(1, 's')
-        assert(np.all(duration == duration[0]))
-        duration = duration[0]
-
-        dataset = dataset/(json_data['level_heights'][:,None]*duration)*1.0e9
-    else:
-        raise "Unknown unit {:s}".format(unit)
 
     #Create x ticks and y ticks
     x_ticks = np.arange(0, json_data['emission_times'].size)
@@ -210,6 +206,8 @@ def plotEmissions(json_data,
     y_labels = ["{:.0f}".format(a) for a in np.cumsum(np.concatenate(([json_data['volcano_altitude']], json_data['level_heights'])))]
 
     #Subsample x ticks / y ticks
+    #x_ticks = x_ticks[2::48]
+    #x_labels = x_labels[2::48]
     x_ticks = x_ticks[3::8]
     x_labels = x_labels[3::8]
     y_ticks = y_ticks[::2]
@@ -227,14 +225,14 @@ def plotEmissions(json_data,
     plotargs.update(**kwargs)
 
     plt.imshow(dataset, **plotargs)
-    plt.colorbar(orientation='horizontal', pad=0.15)
+    cbar = plt.colorbar(orientation='horizontal', pad=0.15, label=unit)
     plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
     plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
 
     if (plotsum):
         plt.sca(plt.gca().twinx())
         plt.autoscale(False)
-        plt.plot(dataset.sum(axis=0), 'kx--', linewidth=2, alpha=0.5, label='Sum')
+        plt.plot(dataset.sum(axis=0), 'k--', linewidth=2, alpha=0.5, label='Sum')
         plt.ylim(0, y_max)
         plt.grid()
         plt.legend()
@@ -250,6 +248,7 @@ def plotAshInv(json_data,
                 dpi=200,
                 fig_width=6,
                 fig_height=4,
+                vmin=0,
                 vmax=None,
                 plot_a_priori=True,
                 plot_a_posteriori=True,
@@ -270,11 +269,28 @@ def plotAshInv(json_data,
 
     if (nfigs == 1):
         axs = [axs]
+    
+    unit_scale = 0.0
+    if (unit == 'tg'):
+        unit_scale = 1.0
+    elif (unit == 'kg/(m*s)'):
+        # The setup is to emit 1 tg over three hours for each level
+        # Converting this to kg / (m * s)
+        duration = np.diff(json_data['emission_times'])/np.timedelta64(1, 's')
+        assert(np.all(duration == duration[0]))
+        duration = duration[0]
 
-    y_max = max(1.0e-10, 1.3*max(json_data['a_priori'].sum(axis=0).max(), json_data['a_posteriori'].sum(axis=0).max()))
+        unit_scale = 1.0/(json_data['level_heights'][:,None]*duration)*1.0e9
+    else:
+        raise "Unknown unit {:s}".format(unit)
+        
+        
+    
+
+    y_max = max(1.0e-10, 1.3*max((unit_scale*json_data['a_priori']).sum(axis=0).max(), (unit_scale*json_data['a_posteriori']).sum(axis=0).max()))
 
     if (vmax is None):
-        vmax = max(json_data['a_priori'].max(), json_data['a_posteriori'].max())
+        vmax = max((unit_scale*json_data['a_priori']).max(), (unit_scale*json_data['a_posteriori']).max())
 
     fig_ctr = 0
 
@@ -282,10 +298,11 @@ def plotAshInv(json_data,
     if (plot_a_priori):
         plt.sca(axs[fig_ctr])
         plt.title("A priori ({:s})".format(unit))
-        plotEmissions(json_data, json_data['a_priori'], 
-            unit='tg', 
+        plotEmissions(json_data, unit_scale*json_data['a_priori'], 
+            unit=unit, 
             colormap=colormap, 
             axis_date_format=axis_date_format, 
+            vmin=vmin,
             vmax=vmax, 
             y_max=y_max,
             plotsum=plotsum, 
@@ -296,10 +313,11 @@ def plotAshInv(json_data,
     if (plot_a_posteriori):
         plt.sca(axs[fig_ctr])
         plt.title("A posteriori ({:s})".format(unit))
-        plotEmissions(json_data, json_data['a_posteriori'], 
-            unit='tg', 
+        plotEmissions(json_data, unit_scale*json_data['a_posteriori'], 
+            unit=unit, 
             colormap=colormap, 
             axis_date_format=axis_date_format, 
+            vmin=vmin,
             vmax=vmax, 
             y_max=y_max,
             plotsum=plotsum, 

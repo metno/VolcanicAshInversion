@@ -101,7 +101,8 @@ class MatchFiles:
                     volcano_lon=None,
                     max_distance=None,
                     min_time=datetime.datetime.min,
-                    max_time=datetime.datetime.max):
+                    max_time=datetime.datetime.max,
+                    num_parallel=None):
         """
         Loops through all observation files, and tries to match observation with simulations
 
@@ -293,8 +294,10 @@ class MatchFiles:
             return statistics
         
         #Run file matching in parallel
-        num_cores = multiprocessing.cpu_count()
-        results = Parallel(n_jobs=num_cores)(delayed(match_single_file)(obs_file) for obs_file in self.obs_files.itertuples())
+        if (num_parallel is None):
+            num_parallel = multiprocessing.cpu_count()
+            self.logger.info("Using {:d} parallel jobs".format(num_parallel))
+        results = Parallel(n_jobs=num_parallel)(delayed(match_single_file)(obs_file) for obs_file in self.obs_files.itertuples())
 
         total_num_obs = 0
         total_num_zero_obs = 0
@@ -904,6 +907,8 @@ if __name__ == "__main__":
                         help="Emissions starting before this time are ignored")
     parser.add("--max_time", type=datetime.datetime.fromisoformat, default=datetime.datetime(2100,1,1, tzinfo=datetime.timezone.utc), 
                         help="Emissions starting after this time are ignored")
+    parser.add("--num_parallel", type=int, default=4, 
+                        help="Number of parallel jobs for file maching")
 
     args = parser.parse_args()
 
@@ -940,4 +945,5 @@ if __name__ == "__main__":
                       volcano_lon=args.volcano_lon,
                       max_distance=args.max_distance,
                       min_time=args.min_time,
-                      max_time=args.max_time)
+                      max_time=args.max_time,
+                      num_parallel=args.num_parallel)
