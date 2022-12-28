@@ -36,7 +36,9 @@ if [[ -z "$INVERSION_ENVIRONMENT_SETUP" ]]; then
     exit -1
 fi
 
-
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+# need to run from script-dir to allow for git
+cd $SCRIPT_DIR
 
 
 
@@ -168,6 +170,7 @@ if [ $RUN_SETUP == 1 ]; then
 
     #Print git version info for reproducibility
     inv_exec echo "INFO: Running git to store source code version and local changes"
+    inv_exec echo $(pwd)
     inv_exec git log -n1
     inv_exec git status --porcelain
     inv_exec echo "INFO: Storing uncommited git changes in patch file '$RESULTS_DIR/uncommitted_changes.patch'"
