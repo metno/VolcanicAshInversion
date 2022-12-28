@@ -2,7 +2,7 @@ name:
   - ash_inversion_env
 channels:
   - defaults
-  - anaconda
+  - conda-forge
 dependencies:
   - json5=0.8.5
   - matplotlib=3.3.4
