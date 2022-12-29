@@ -371,7 +371,7 @@ class AshInversion():
                     obs = nc_file['obs'][:]
                     n_obs = len(obs)
 
-                    obs_flag = nc_file['obs_flag'][:]
+                    # obs_flag = nc_file['obs_flag'][:]
 
                     if (use_elevations):
                         obs_alt = nc_file['obs_alt'][:]*1000 #FIXME: Given in KM
