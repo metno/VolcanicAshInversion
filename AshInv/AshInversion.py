@@ -137,7 +137,7 @@ class AshInversion():
         Read the a priori emission estimates from file
         and make the a priori vectors
 
-        param: a_priori_file - CSV-file with dates and filenames for satellite observations
+        param: a_priori_file - JSON-file with dates and filenames for a_priori
 
         scale_a_priori - Scale a_priori to same unit as emission/observation (typically kg => kg is 1)
         min_emission_uncertainty_scale - Set minimum uncertainty to average multiplied by scale
