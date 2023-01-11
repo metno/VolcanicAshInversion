@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 ##############################################################################
@@ -29,30 +29,33 @@ if __name__ == "__main__":
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.colors import LinearSegmentedColormap, LogNorm
-import scipy.sparse
+from matplotlib.colors import LinearSegmentedColormap, LogNorm, TwoSlopeNorm, SymLogNorm
 import numpy as np
 import datetime
 import json
 import os
 
 
-
 def makePlotFromJson(json_filename, outfile=None, **kwargs):
-    json_data = readJson(json_filename)
-    fig = plotAshInv(json_data, **kwargs)
+    json_data = readJson(json_filename, **kwargs)
+    fig, axs = plotAshInv(json_data, **kwargs)
 
     if (outfile is not None):
-        basename, ext = os.path.splitext(os.path.abspath(json_filename))
+        basename, ext = os.path.splitext(os.path.abspath(outfile))
         if (ext == 'pdf'):
             saveFig(outfile, fig, json_data["meta"])
         else:
             fig.savefig(outfile)
 
-    return fig
+    return fig, axs
 
 
-def readJson(json_filename, prune=True, prune_zero=0):
+def readJson(json_filename, 
+        prune=True, 
+        prune_zero=0, 
+        valid_times_min=None, 
+        valid_times_max=None,
+        **kwargs):
     #Read data
     with open(json_filename, 'r') as infile:
         json_string = infile.read()
@@ -86,8 +89,10 @@ def readJson(json_filename, prune=True, prune_zero=0):
     if (prune):
         valid_elevations = max(np.flatnonzero((json_data['a_priori'].max(axis=1) + json_data['a_posteriori'].max(axis=1)) > prune_zero)) + 1
         valid_times = np.flatnonzero((json_data['a_priori'].max(axis=0) + json_data['a_posteriori'].max(axis=0)) > prune_zero)
-        valid_times_min = min(valid_times)
-        valid_times_max = max(valid_times) + 1
+        if valid_times_min is None:
+            valid_times_min = min(valid_times)
+        if valid_times_max is None:
+            valid_times_max = max(valid_times) + 1
 
         json_data['a_priori'] = json_data['a_priori'][:valid_elevations,valid_times_min:valid_times_max]
         json_data['a_posteriori'] = json_data['a_posteriori'][:valid_elevations,valid_times_min:valid_times_max]
@@ -114,43 +119,13 @@ def expandVariable(emission_times, level_heights, ordering_index, variable):
 def saveFig(filename, fig, metadata):
     with PdfPages(filename) as pdf:
         pdf.attach_note(metadata, positionRect=[0, 0, 100, 100])
-        pdf.savefig(fig)
-
-
-def plotAshInv(json_data,
-                unit="tg",
-                colormap='default',
-                usetex=True,
-                plotsum=True,
-                prune=True,
-                orientation='vertical',
-                axis_date_format="%d %b\n%H:%M",
-                dpi=200,
-                fig_width=6,
-                fig_height=4,
-                vmax=None,
-                r_vmax=2.0,
-                **kwargs):
-
-    def npTimeToDatetime(np_time):
-        return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00')) / np.timedelta64(1, 's'))
-
-    def npTimeToStr(np_time, fmt="%Y-%m-%d %H:%M"):
-        return npTimeToDatetime(np_time).strftime(fmt)
-
-    if (unit == 'tg'):
-        pass
-    elif (unit == 'kg/(m*s)'):
-        # The setup is to emit 1 tg over three hours for each level
-        # Converting this to kg / (m * s)
-        duration = np.diff(json_data['emission_times'])/np.timedelta64(1, 's')
-        assert(np.all(duration == duration[0]))
-        duration = duration[0]
-
-        json_data['a_priori'] = json_data['a_priori']/(json_data['level_heights'][:,None]*duration)*1.0e9
-        json_data['a_posteriori'] = json_data['a_posteriori']/(json_data['level_heights'][:,None]*duration)*1.0e9
-    else:
-        raise "Unknown unit {:s}".format(unit)
+        pdf.savefig(fig, bbox_inches='tight', pad_inches=0)
+        
+        
+def getColorMap(colormap, bins=256):
+    #If we already have a colormap
+    if (not isinstance(colormap, str)):
+        return colormap
 
     colors = [
         (0.0, (1.0, 1.0, 0.8)),
@@ -159,7 +134,17 @@ def plotAshInv(json_data,
         (0.6, (1.0, 0.0, 0.0)),
         (1.0, (0.6, 0.2, 1.0))
     ]
-    if (colormap == 'alternative'):
+    if (colormap == 'default'):
+        pass
+    elif (colormap == 'ippc'):
+        colors = [
+            (0.0/4, (1.0, 1.0, 1.0)), #0-0.2 g/m2 white
+            (0.2/4, (0.498, 0.996, 0.996)), #0.2-2.0 g/m2 turquoise
+            (2.0/4, (0.573, 0.58, 0.592)), #2.0-4.0 g/m2 gray
+            (4.0/4, (0.875, 0.012, 0.012)) # >4.0 g/m2 red
+        ]
+        bins = 5
+    elif (colormap == 'alternative'):
         colors = [
             (0.0, (1.0, 1.0, 0.6)),
             (0.4, (0.9, 1.0, 0.2)),
@@ -188,13 +173,31 @@ def plotAshInv(json_data,
             ( 5.00/10, ("#ff0d00")),
             (10.00/10, ("#910000"))
         ]
-    cm = LinearSegmentedColormap.from_list('ash', colors, N=256)
+    else:
+        # Assume this is a standard matplotlib colormap name
+        return colormap
+        
+    cm = LinearSegmentedColormap.from_list('ash', colors, N=bins)
     cm.set_bad(alpha = 0.0)
 
-    if (orientation == 'horizontal'):
-        fig, axs = plt.subplots(nrows=1, ncols=4, figsize=(4*fig_width,fig_height), dpi=dpi)
-    elif (orientation == 'vertical'):
-        fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(fig_width,4*fig_height), dpi=dpi)
+    return cm
+    
+def npTimeToDatetime(np_time):
+    return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00')) / np.timedelta64(1, 's'))
+
+def npTimeToStr(np_time, fmt="%Y-%m-%d %H:%M"):
+    return npTimeToDatetime(np_time).strftime(fmt)
+
+def plotEmissions(json_data,
+                dataset,
+                colormap='default',
+                unit='tg',
+                axis_date_format="%d %b\n%H:%M",
+                y_max=None,
+                usetex=True,
+                plotsum=True,
+                **kwargs,
+            ):
 
     #Create x ticks and y ticks
     x_ticks = np.arange(0, json_data['emission_times'].size)
@@ -203,79 +206,165 @@ def plotAshInv(json_data,
     y_labels = ["{:.0f}".format(a) for a in np.cumsum(np.concatenate(([json_data['volcano_altitude']], json_data['level_heights'])))]
 
     #Subsample x ticks / y ticks
+    #x_ticks = x_ticks[2::48]
+    #x_labels = x_labels[2::48]
     x_ticks = x_ticks[3::8]
     x_labels = x_labels[3::8]
     y_ticks = y_ticks[::2]
     y_labels = y_labels[::2]
+    
+    if (y_max is None):
+        y_max = max(1.0e-10, 1.3*dataset.sum(axis=0).max())
 
-    y_max = max(1.0e-10, 1.3*max(json_data['a_priori'].sum(axis=0).max(), json_data['a_posteriori'].sum(axis=0).max()))
+    plotargs = {
+        'aspect': 'auto', 
+        'interpolation': 'none',
+        'origin': 'lower', 
+        'cmap': getColorMap(colormap)
+    }
+    plotargs.update(**kwargs)
+
+    plt.imshow(dataset, **plotargs)
+    cbar = plt.colorbar(orientation='horizontal', pad=0.15, label=unit)
+    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
+    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
+
+    if (plotsum):
+        plt.sca(plt.gca().twinx())
+        plt.autoscale(False)
+        plt.plot(dataset.sum(axis=0), 'k--', linewidth=2, alpha=0.5, label='Sum')
+        plt.ylim(0, y_max)
+        plt.grid()
+        plt.legend()
+        
+
+def plotAshInv(json_data,
+                unit="tg",
+                colormap='default',
+                usetex=True,
+                plotsum=True,
+                orientation='vertical',
+                axis_date_format="%d %b\n%H:%M",
+                dpi=200,
+                fig_width=6,
+                fig_height=4,
+                vmin=0,
+                vmax=None,
+                plot_a_priori=True,
+                plot_a_posteriori=True,
+                plot_difference=True,
+                plot_residual=True,
+                **kwargs):
+
+    nfigs=0
+    if (plot_a_priori): nfigs += 1
+    if (plot_a_posteriori): nfigs += 1
+    if (plot_difference): nfigs += 1
+    if (plot_residual): nfigs += 1
+    
+    if (orientation == 'horizontal'):
+        fig, axs = plt.subplots(nrows=1, ncols=nfigs, figsize=(nfigs*fig_width,fig_height), dpi=dpi)
+    elif (orientation == 'vertical'):
+        fig, axs = plt.subplots(nrows=nfigs, ncols=1, figsize=(fig_width,nfigs*fig_height), dpi=dpi)
+
+    if (nfigs == 1):
+        axs = [axs]
+    
+    unit_scale = 0.0
+    if (unit == 'tg'):
+        unit_scale = 1.0
+    elif (unit == 'kg/(m*s)'):
+        # The setup is to emit 1 tg over three hours for each level
+        # Converting this to kg / (m * s)
+        duration = np.diff(json_data['emission_times'])/np.timedelta64(1, 's')
+        assert(np.all(duration == duration[0]))
+        duration = duration[0]
+
+        unit_scale = 1.0/(json_data['level_heights'][:,None]*duration)*1.0e9
+    else:
+        raise "Unknown unit {:s}".format(unit)
+        
+        
+    
+
+    y_max = max(1.0e-10, 1.3*max((unit_scale*json_data['a_priori']).sum(axis=0).max(), (unit_scale*json_data['a_posteriori']).sum(axis=0).max()))
 
     if (vmax is None):
-        vmax = max(json_data['a_priori'].max(), json_data['a_posteriori'].max())
+        vmax = max((unit_scale*json_data['a_priori']).max(), (unit_scale*json_data['a_posteriori']).max())
+
+    fig_ctr = 0
 
     # First subfigure (a priori)
-    plt.sca(axs[0])
-    plt.title("A priori ({:s})".format(unit))
-    plt.imshow(json_data['a_priori'], aspect='auto', interpolation='none', origin='lower', cmap=cm, vmin=0.0, vmax=vmax)
-    plt.colorbar(orientation='horizontal', pad=0.15)
-    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
-    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
-
-    if (plotsum):
-        plt.sca(axs[0].twinx())
-        plt.autoscale(False)
-        plt.plot(json_data['a_priori'].sum(axis=0), 'kx--', linewidth=2, alpha=0.5, label='A priori')
-        plt.ylim(0, y_max)
-        plt.grid()
-        plt.legend()
+    if (plot_a_priori):
+        plt.sca(axs[fig_ctr])
+        plt.title("A priori ({:s})".format(unit))
+        plotEmissions(json_data, unit_scale*json_data['a_priori'], 
+            unit=unit, 
+            colormap=colormap, 
+            axis_date_format=axis_date_format, 
+            vmin=vmin,
+            vmax=vmax, 
+            y_max=y_max,
+            plotsum=plotsum, 
+            usetex=usetex)
+        fig_ctr += 1
 
     #Second subfigure (a posteriori)
-    plt.sca(axs[1])
-    plt.title("Inverted ({:s})".format(unit))
-    plt.imshow(json_data['a_posteriori'], aspect='auto', interpolation='none', origin='lower', cmap=cm, vmin=0.0, vmax=vmax)
-    plt.colorbar(orientation='horizontal', pad=0.15)
-    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
-    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
-
-    if (plotsum):
-        plt.sca(axs[1].twinx())
-        plt.autoscale(False)
-        plt.plot(json_data['a_priori'].sum(axis=0), 'kx--', linewidth=2, alpha=0.5, label='A priori')
-        plt.plot(json_data['a_posteriori'].sum(axis=0), 'ko-', fillstyle='none', label='Inverted')
-        plt.ylim(0, y_max)
-        plt.grid()
-        plt.legend()
+    if (plot_a_posteriori):
+        plt.sca(axs[fig_ctr])
+        plt.title("A posteriori ({:s})".format(unit))
+        plotEmissions(json_data, unit_scale*json_data['a_posteriori'], 
+            unit=unit, 
+            colormap=colormap, 
+            axis_date_format=axis_date_format, 
+            vmin=vmin,
+            vmax=vmax, 
+            y_max=y_max,
+            plotsum=plotsum, 
+            usetex=usetex)
+        fig_ctr += 1
 
     #Third subfigure (difference)
-    diff = (json_data['a_posteriori']-json_data['a_priori']) / json_data['a_priori']
-    plt.sca(axs[2])
-    plt.title("(Inverted - A priori) / A priori")
-    plt.imshow(diff, aspect='auto',
-        interpolation='none',
-        origin='lower',
-        cmap='bwr', vmin=-r_vmax, vmax=r_vmax)
-    plt.colorbar(orientation='horizontal', pad=0.15)
-    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
-    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
-
+    if (plot_difference):
+        plt.sca(axs[fig_ctr])
+        plt.title("(Inverted - A priori) / A priori")
+        norm = TwoSlopeNorm(vmin=-1.0, vcenter=0, vmax=2)
+        #norm = SymLogNorm(linthresh=0.1, vmin=-1.0, vmax=r_vmax, base=10)
+        #norm = MidpointLogNorm(lin_thres=0.01, lin_scale=1.0, vmin=-1.0, vmax=10, base=10)
+        diff = (json_data['a_posteriori']-json_data['a_priori']) / json_data['a_priori']
+        plotEmissions(json_data, diff, 
+            unit='tg', 
+            colormap='bwr', 
+            axis_date_format=axis_date_format, 
+            y_max=y_max,
+            plotsum=False, 
+            usetex=usetex,
+            norm=norm,
+            vmin=-1,
+            vmax=2)
+        fig_ctr += 1
 
     #Fourth subfigure (convergence)
-    plt.sca(axs[3])
-    plt.title("Convergence / residual")
-    plt.plot(json_data['convergence'], 'r-', linewidth=2, label='Convergence')
-    plt.xlabel("Iteration")
+    if (plot_residual):
+        plt.sca(axs[fig_ctr])
+        plt.title("Convergence / residual")
+        plt.plot(json_data['convergence'], 'r-', linewidth=2, label='Convergence')
+        plt.xlabel("Iteration")
 
-    plt.sca(axs[3].twinx())
-    plt.plot(json_data['residual'], 'b-', linewidth=2, label='Residual')
-    plt.xlabel("Iteration")
+        plt.sca(axs[3].twinx())
+        plt.plot(json_data['residual'], 'b-', linewidth=2, label='Residual')
+        plt.xlabel("Iteration")
 
-    plt.legend()
+        plt.legend()
+
+        fig_ctr += 1
+
 
     #Set tight layout to minimize overlap
-    #plt.tight_layout()
+    plt.tight_layout()
     #plt.subplots_adjust(top=0.9)
 
-    return fig
+    return fig, axs
 
 
 
@@ -329,7 +418,7 @@ def downsample(arr, target, rebin_type='median'):
     return rebin(arr, target_size, rebin_type)
 
 
-def plotAshInvMatrix(matrix, fig=None, downsample=True, rebin_type='median'):
+def plotAshInvMatrix(matrix, fig=None, do_downsample=True, rebin_type='median'):
     if (fig is None):
         fig = plt.figure(figsize=(18, 18))
 
@@ -341,7 +430,7 @@ def plotAshInvMatrix(matrix, fig=None, downsample=True, rebin_type='median'):
     extent = [0, matrix.shape[1], matrix.shape[0], 0]
 
     m = matrix
-    if (downsample):
+    if (do_downsample):
         m = downsample(matrix, fig_size, rebin_type)
 
     #For plotting, force negative numbers to zero

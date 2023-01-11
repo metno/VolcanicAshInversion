@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 ##############################################################################
@@ -33,6 +33,10 @@ from netCDF4 import Dataset, num2date
 import os
 import re
 import json
+from joblib import Parallel, delayed
+import multiprocessing
+
+from AshInv import Misc
 
 
 class MatchFiles:
@@ -49,7 +53,7 @@ class MatchFiles:
         self.sim_files = pd.read_csv(emep_runs, parse_dates=[0], comment='#')
         self.obs_files = pd.read_csv(satellite_observations, parse_dates=[0], comment='#')
 
-        #Remove timezone information
+        #Convert to UTC and remove timezone information
         self.logger.warning("Converting times from CSV files to UTC")
         self.sim_files['date'] = self.sim_files['date'].dt.tz_convert(None)
         self.obs_files['date'] = self.obs_files['date'].dt.tz_convert(None)
@@ -64,6 +68,21 @@ class MatchFiles:
             self.obs_files.filename = self.obs_files.filename.apply(lambda x: os.path.join(satellite_observations_basedir, x))
         else:
             self.obs_files.filename = self.obs_files.filename.apply(lambda x: os.path.join(os.path.dirname(satellite_observations), x))
+            
+        #Remove non-existing files
+        sim_files_missing = self.sim_files['filename'].apply(os.path.exists) == False
+        if (np.any(sim_files_missing)):
+            self.logger.warning("Missing simulation files:")
+            self.logger.warning(self.sim_files[sim_files_missing].to_string())
+            self.sim_files.drop(self.sim_files[sim_files_missing].index, inplace=True)
+            self.sim_files = self.sim_files.reset_index(drop=True)
+            
+        obs_files_missing = self.obs_files['filename'].apply(os.path.exists)
+        if (np.any(obs_files_missing)):
+            self.logger.warning("Missing observation files:")
+            self.logger.warning(self.obs_files[obs_files_missing].to_string())
+            self.obs_files.drop(self.obs_files[obs_files_missing == False].index, inplace=True)
+            self.obs_files = self.obs_files.reset_index(drop=True)
 
         if (self.verbose):
             self.logger.debug("Simulation files: " + pprint.pformat(self.sim_files))
@@ -77,7 +96,13 @@ class MatchFiles:
                     zero_thinning=0.7,
                     obs_zero=1.0e-20,
                     dummy_observation_json=None,
-                    fix_broken_netcdf_files=False):
+                    fix_broken_netcdf_files=False,
+                    volcano_lat=None,
+                    volcano_lon=None,
+                    max_distance=None,
+                    min_time=datetime.datetime.min,
+                    max_time=datetime.datetime.max,
+                    num_parallel=None):
         """
         Loops through all observation files, and tries to match observation with simulations
 
@@ -111,33 +136,34 @@ class MatchFiles:
             else:
                 nc_file.close()
 
-            #Raise error if timezone supplied in NetCDF file
+            #Raise error if wrong timezone supplied in NetCDF file (should be UTC or none)
             for i in range(len(sim_time)):
-                if (sim_time[i].tzinfo is not None and sim_time[i].tzinfo is not datetime.timezone.utc):
-                    raise RuntimeError("Invalid timezone info in {:s}".format(row['filename']))
-                else:
-                    #Remove timezone info
+                if (sim_time[i].tzinfo is None):
+                    continue
+                elif (sim_time[i].tzinfo is datetime.timezone.utc):
                     sim_time[i].replace(tzinfo=None)
+                else:
+                    raise RuntimeError("Invalid timezone info in {:s}".format(row['filename']))
 
             #Find minimum and maximum time
-            min_time = sim_time[0]
-            max_time = sim_time[0]
+            min_t = sim_time[0]
+            max_t = sim_time[0]
             for t in sim_time[1:]:
-                min_time = min(min_time, t)
-                max_time = max(max_time, t)
+                min_t = min(min_t, t)
+                max_t = max(max_t, t)
 
-            return min_time, max_time
+            return min_t, max_t
 
         self.sim_files['first_ts'], self.sim_files['last_ts'] = zip(*self.sim_files.apply(getNCTimes, axis=1))
 
-        #Prune observation files that clearly do not match up
+        #Prune observation files that do not match up
         valid_obs_files = np.empty(self.obs_files.shape[0], dtype=np.bool)
         for i in range(self.obs_files.shape[0]):
             #All observations with no matching simulation can be removed
             obs_time = self.obs_files.date[i]
             first = (obs_time - self.sim_files.first_ts) / datetime.timedelta(days=1)
             last = (obs_time - self.sim_files.last_ts) / datetime.timedelta(days=1)
-            valid_sim_files = (first >= 0) & (last <= 0)
+            valid_sim_files = (first >= min_days) & (last <= max_days) & (self.sim_files.first_ts <= max_time) & (self.sim_files.last_ts >= min_time)
             valid_obs_files[i] = np.any(valid_sim_files)
         if (np.count_nonzero(valid_obs_files) < self.obs_files.shape[0]):
             self.logger.info("Removing {:d}/{:d} non-matching observation files".format(self.obs_files.shape[0]-np.count_nonzero(valid_obs_files), self.obs_files.shape[0]))
@@ -158,30 +184,43 @@ class MatchFiles:
             self.obs_files = pd.concat([self.obs_files, processed_obs_files])
             self.obs_files = self.obs_files.drop_duplicates('filename', keep='last')
             self.obs_files.reset_index(drop=True, inplace=True)
-
-        #Loop over observation files (outer loop)
-        num_obs = 0
-        num_zero_obs = 0
-        for obs_file in self.obs_files.itertuples():
+            
+        def match_single_file(obs_file):
             out_filename = os.path.splitext(os.path.basename(obs_file.filename))[0] + "_matched.nc"
+            out_filename_metadata = os.path.join(output_dir, os.path.splitext(out_filename)[0] + ".txt")
+            
+            if os.path.isfile(out_filename_metadata):
+                try: 
+                    with open(out_filename_metadata, 'r') as file:
+                        data = file.read().splitlines() 
+                        obs_file_index = int(data[0])
+                        out_filename = data[1]
+                        num_obs = int(data[2])
+                        num_zero_obs = int(data[3])
+                        num_timesteps = int(data[4])
+                        num_altitudes = int(data[5])
+                except:
+                    self.logger.warning("File {:d}/{:d} metadata file failed - reprocessing - {:s}".format(obs_file.Index+1, self.obs_files.shape[0], out_filename))
+                    pass
+                else:
+                    self.logger.info("File {:d}/{:d} already processed - {:s}".format(obs_file.Index+1, self.obs_files.shape[0], out_filename))
+                    return [obs_file_index, out_filename, num_obs, num_zero_obs, num_timesteps, num_altitudes]
+                    
             self.logger.info("Creating {:d}/{:d} - {:s}".format(obs_file.Index+1, self.obs_files.shape[0], out_filename))
-
-            if (pd.notna(obs_file.matched_file)):
-                self.logger.info("Already processed {:s}, skipping".format(obs_file.matched_file))
-                continue
 
             #Read observation data
             if (dummy_observation_json is not None):
                 obs_lon, obs_lat, obs, obs_alt, obs_flag = self.make_dummy_observation_data(obs_file.date, dummy_observation_json)
             else:
-                obs_lon, obs_lat, obs, obs_alt, obs_flag = self.read_observation_data(obs_file.filename, fix_broken_netcdf_files=fix_broken_netcdf_files)
+                obs_lon, obs_lat, obs, obs_alt, obs_flag = self.read_observation_data(obs_file.filename, fix_broken_netcdf_files=fix_broken_netcdf_files, 
+                                                                                        volcano_lat=volcano_lat, volcano_lon=volcano_lon, max_distance=max_distance)
 
             #Read simulation data
             try:
-                sim_lon, sim_lat, sim_date, sim = self.read_simulation_data(obs_file.date, min_days=min_days, max_days=max_days)
+                sim_lon, sim_lat, sim_date, sim = self.read_simulation_data(obs_file.date, min_days=min_days, max_days=max_days, min_time=min_time, max_time=max_time)
             except ValueError as e:
                 self.logger.error("Could not match {:s}. Got error {:s}".format(obs_file.filename, str(e)))
-                continue
+                return [obs_file.Index, obs_file.filename, 0, 0, 0, 0]
 
             #Make sure the two files match in size
             obs_lon, obs_lat, obs, obs_alt, obs_flag, sim = self.match_size(obs_lon, obs_lat, obs, obs_alt, obs_flag, sim_lon, sim_lat, sim)
@@ -234,28 +273,47 @@ class MatchFiles:
                     sim = sim[keep, :, :]
                     obs_lon = obs_lon[keep]
                     obs_lat = obs_lat[keep]
-            self.logger.info("Added {:d} observations ({:.2f} % zeros). Ignored {:d} uncertain, and {:d}/{:d} zeroes".format(
-                obs.size,
-                100*(n_total_zero-n_remove_zero)/max(1, obs.size),
+            self.logger.info("Added {:d} ash observations and {:d} no ash observations. Ignored {:d} uncertain, and {:d}/{:d} zeroes".format(
+                obs.size-(n_total_zero-n_remove_zero),
+                n_total_zero-n_remove_zero,
                 n_remove_af,
                 n_remove_zero,
                 n_total_zero))
-            num_obs += obs.size
-            num_zero_obs += n_total_zero-n_remove_zero
+            num_zero_obs = n_total_zero-n_remove_zero
 
             #Write to file
             self.write_matched_data(obs_lon, obs_lat, obs, obs_alt, obs_flag, obs_file.date, sim, sim_date, os.path.join(output_dir, out_filename))
+            
+            #Write metadata-file
+            statistics = [obs_file.Index, out_filename, obs.size, num_zero_obs, sim.shape[1], sim.shape[2]]
+            with open(out_filename_metadata, 'w') as file:
+                for stat in statistics:
+                    file.write(str(stat) + "\n")
+                    
+            #Return statistics
+            return statistics
+        
+        #Run file matching in parallel
+        if (num_parallel is None):
+            num_parallel = multiprocessing.cpu_count()
+            self.logger.info("Using {:d} parallel jobs".format(num_parallel))
+        results = Parallel(n_jobs=num_parallel)(delayed(match_single_file)(obs_file) for obs_file in self.obs_files.itertuples())
 
+        total_num_obs = 0
+        total_num_zero_obs = 0
+        for result in results:
             #Update statistics for this file
-            self.obs_files.at[obs_file.Index, "matched_file"] = out_filename
-            self.obs_files.at[obs_file.Index, "num_observations"] = obs.size
-            self.obs_files.at[obs_file.Index, "num_timesteps"] = sim.shape[1]
-            self.obs_files.at[obs_file.Index, "num_altitudes"] = sim.shape[2]
+            self.obs_files.at[result[0], "matched_file"] = result[1]
+            self.obs_files.at[result[0], "num_observations"] = result[2]
+            self.obs_files.at[result[0], "num_timesteps"] = result[4]
+            self.obs_files.at[result[0], "num_altitudes"] = result[5]
+            
+            total_num_obs += result[2]
+            total_num_zero_obs += result[3]
 
-            #Update CSV-file
-            self.obs_files.to_csv(matched_out_csv, index=False)
-        self.logger.info("Added a total of {:d} observations ({:.2f} % zeros)".format(num_obs, 100*num_zero_obs/max(1, num_obs)))
-
+        #Update CSV-file
+        self.obs_files.to_csv(matched_out_csv, index=False)
+        self.logger.info("Added a total of {:d} observations ({:.2f} % zeros) from {:d} files".format(total_num_obs, 100*total_num_zero_obs/max(1, total_num_obs), len(results)))
 
 
 
@@ -534,7 +592,10 @@ class MatchFiles:
                  netcdf_observation_varnames=["AshMass", "ash_loading", "ash_concentration_col"],
                  netcdf_observation_altitude_varnames=["AshHeight"],
                  netcdf_observation_error_varnames=["AshFlag", "AF", "ash_flag"],
-                 fix_broken_netcdf_files=False):
+                 fix_broken_netcdf_files=False,
+                 volcano_lat=None, 
+                 volcano_lon=None, 
+                 max_distance=None):
         """
         Reads the observation and observation flag from the NetCDF file
 
@@ -607,7 +668,7 @@ class MatchFiles:
 
 
         # Get actual data
-        with Dataset(filename, mode='r') as nc_file:
+        with Dataset(filename, mode='r') as nc_file:            
             if ('longitude' in nc_file.variables.keys()):
                 lon = nc_file['longitude'][:]
                 lat = nc_file['latitude'][:]
@@ -618,7 +679,22 @@ class MatchFiles:
                 raise RuntimeError("No supported spatial dimension")
 
             try:
-                obs = nc_file[netcdf_observation_varname][:,:]
+                obs_var = nc_file[netcdf_observation_varname]
+            
+                if ("valid_min" in obs_var.__dict__ and hasattr(obs_var.valid_min, '__len__') and obs_var.valid_min[-1] == "f"):
+                    self.logger.warning("Observation file has wrong valid_min (not parseable as float...). Trying to fix")
+                    my_valid_min = float(obs_var.valid_min[:-1])
+                    nc_file.set_auto_mask(False)
+                    obs = obs_var[:,:]
+                    nc_file.set_auto_mask(True)
+                    
+                    mask = (obs <= my_valid_min)
+                    obs = np.ma.masked_array(obs, mask)
+                    self.logger.warning("Result has {:d} masked and {:d} unmasked values".format(np.count_nonzero(mask), np.count_nonzero(mask==False)))
+                else:
+                    obs = obs_var[:,:]
+
+            
                 if (netcdf_observation_altitude_varname is not None):
                     obs_alt = nc_file[netcdf_observation_altitude_varname][:,:]
                 else:
@@ -627,6 +703,14 @@ class MatchFiles:
             except Exception as e:
                 self.logger.error("Error reading observations from {:s}, please check your NetCDF file".format(filename))
                 raise e
+
+        #Filter out distances that are too far away by marking them as 2 - uncertain
+        if (max_distance is not None):
+            m_lon, m_lat = np.meshgrid(lon, lat)
+            distances = Misc.great_circle_distance_in_meters(volcano_lon, volcano_lat, m_lon, m_lat)/1000
+            mask = distances > max_distance
+            self.logger.info("Filtering out {:d}/{:d} observations {:f} km from lon={:f} lat={:f}".format(np.sum(obs_flag[mask]<2), np.sum(obs_flag<2), max_distance, volcano_lon, volcano_lat))
+            obs_flag[mask] = 2
 
         #Possibly transpose observation
         if (obs.shape == (len(lon), len(lat))):
@@ -642,6 +726,7 @@ class MatchFiles:
 
     def read_simulation_data(self, obs_time,
                              min_days=0, max_days=6,
+                             min_time=datetime.datetime.min, max_time=datetime.datetime.max,
                              level_regex="COLUMN_ASH_L(\d+)_k(\d+)"):
         """
         Reads all the simulation files in valid_sim_files, and returns an array
@@ -681,7 +766,7 @@ class MatchFiles:
         #and process these
         first = (obs_time - self.sim_files.first_ts) / datetime.timedelta(days=1)
         last = (obs_time - self.sim_files.last_ts) / datetime.timedelta(days=1)
-        valid_sim_files = (first >= min_days) & (last <= max_days)
+        valid_sim_files = (first >= min_days) & (last <= max_days) & (self.sim_files.first_ts <= max_time) & (self.sim_files.last_ts >= min_time)
         valid_sim_files = np.atleast_1d(np.squeeze(np.nonzero(valid_sim_files)))
         if (len(valid_sim_files) == 0):
             raise ValueError("No valid simulation files found!")
@@ -692,6 +777,7 @@ class MatchFiles:
         nx, ny, n_levels = None, None, None
 
         #Loop over simulation files (inner loop)
+        non_matching_files=[]
         for out_i, in_i in enumerate(valid_sim_files):
             emission_time = self.sim_files.date[in_i]
             filename = self.sim_files.filename[in_i]
@@ -743,7 +829,7 @@ class MatchFiles:
                     self.logger.debug("Observation time {:s}, matching emission time: {:s} ({:s}, timestep {:d} - {:s})".format(str(obs_time), str(emission_time), filename, timestep, str(sim_time[timestep])))
                 #FIXME: What is a reasonable delta here?
                 if (np.abs(sim_time[timestep] - np.array(obs_time, dtype=np.datetime64)) > datetime.timedelta(minutes=30)):
-                    self.logger.error("No matching timestep for observation in {:s} (obs time={:s})!".format(filename, str(obs_time)))
+                    non_matching_files += [os.path.basename(filename)]
                     continue
 
                 n_levels_read = 0
@@ -763,6 +849,12 @@ class MatchFiles:
                         self.logger.warning("Number of expected ({:d}) and found ({:d}) levels did not match!".format(n_levels, n_levels_read))
 
         date = self.sim_files.date[valid_sim_files]
+
+        if (len(non_matching_files) > 0):
+            if (self.verbose):
+                self.logger.warning("No matching timestep for observation time {:s} in {:s}".format(str(obs_time), " ".join(non_matching_files)))
+            else:
+                self.logger.warning("No matching timestep for observation time {:s} in {:d} files".format(str(obs_time), len(non_matching_files)))
         return lon, lat, date, data
 
 
@@ -801,6 +893,23 @@ if __name__ == "__main__":
                         help="Fix (by overwriting) broken netcdf files.")
     parser.add("--random_seed", type=int,
                         help="Random seed (to make run reproducible)", default=0)
+    parser.add('--max_days', type=float,
+                        help="Maximum number of days between emission (simulation) and observation", default=6.0)
+    parser.add('--min_days', type=float,
+                        help="Minimum number of days between emission (simulation) and observation", default=0.0)
+    parser.add('--volcano_lat', type=float,
+                        help="Latitude of volcano (used as distance criteria)", default=None)
+    parser.add('--volcano_lon', type=float,
+                        help="Longitude of volcano (used as distance criteria)", default=None)
+    parser.add('--max_distance', type=float,
+                        help="Maximum distance from volcano to consider (in km)", default=None)
+    parser.add("--min_time", type=datetime.datetime.fromisoformat, default=datetime.datetime(1900,1,1, tzinfo=datetime.timezone.utc), 
+                        help="Emissions starting before this time are ignored")
+    parser.add("--max_time", type=datetime.datetime.fromisoformat, default=datetime.datetime(2100,1,1, tzinfo=datetime.timezone.utc), 
+                        help="Emissions starting after this time are ignored")
+    parser.add("--num_parallel", type=int, default=4, 
+                        help="Number of parallel jobs for file maching")
+
     args = parser.parse_args()
 
     print("Arguments: ")
@@ -813,6 +922,10 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.INFO)
 
     np.random.seed(seed=args.random_seed)
+    
+    #Convert min/max time to utc and remove timezone info
+    args.max_time = args.max_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    args.min_time = args.min_time.astimezone(datetime.timezone.utc).replace(tzinfo=None)
 
     match = MatchFiles(emep_runs=args.simulation_csv,
                    satellite_observations=args.observation_csv,
@@ -825,4 +938,12 @@ if __name__ == "__main__":
                       zero_thinning=args.zero_thinning,
                       obs_zero=args.obs_zero,
                       dummy_observation_json=args.dummy_observation_json,
-                      fix_broken_netcdf_files=args.fix_broken_netcdf_files)
+                      fix_broken_netcdf_files=args.fix_broken_netcdf_files,
+                      max_days=args.max_days,
+                      min_days=args.min_days,
+                      volcano_lat=args.volcano_lat,
+                      volcano_lon=args.volcano_lon,
+                      max_distance=args.max_distance,
+                      min_time=args.min_time,
+                      max_time=args.max_time,
+                      num_parallel=args.num_parallel)

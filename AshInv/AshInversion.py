@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 ##############################################################################
@@ -10,7 +10,7 @@
 #                                                                            #
 #    PVAI is free software: you can redistribute it and/or modify            #
 #    it under the terms of the GNU General Public License as published by    #
-#    the Free Software Foundation, either version 2 of the License, or       #
+#    the Free Software Foundation, evither version 2 of the License, or      #
 #    (at your option) any later version.                                     #
 #                                                                            #
 #    PVAI is distributed in the hope that it will be useful,                 #
@@ -259,19 +259,6 @@ class AshInversion():
         def npTimeToDatetime(np_time):
             return datetime.datetime.utcfromtimestamp((np_time - np.datetime64('1970-01-01T00:00:00Z')) / np.timedelta64(1, 's'))
 
-        #Remove timesteps from a priori that don't match up with matched files (make system matrix far smaller)
-        matched_times = np.array(matched_files_df["date"], dtype='datetime64[ns]')
-        remove = np.ones((self.level_heights.size, self.emission_times.size), dtype=np.bool)
-        for t, emission_time in enumerate(self.emission_times):
-            min_days=0
-            max_days=6
-            deltas = (matched_times - emission_time) / np.timedelta64(1, 'D')
-            valid = (deltas >= min_days) & (deltas < max_days)
-            if np.any(valid):
-                remove[:,t] = False
-        self.logger.info("Removing {:d}/{:d} a priori values without observations".format(np.count_nonzero(remove), self.emission_times.size*self.level_heights.size))
-        self.make_ordering_index(remove)
-
         #Allocate data
         gc.collect()
         num_emissions = np.count_nonzero(self.ordering_index >= 0)
@@ -291,19 +278,22 @@ class AshInversion():
                     total_num_emis,
                     total_num_emis*(8+8)/(1024*1024*1024)))
             #Allocated this way on purpose to force numpy to preallocate data for us
-            M_data = np.empty(total_num_emis, dtype=np.float64)
-            M_indices = np.empty(total_num_emis, dtype=np.int64)
-            M_indptr = np.empty(total_num_obs+1, dtype=np.int64)
-            M_data.fill(0.0)
-            M_indices.fill(0)
-            M_indptr.fill(0)
+            M_data = np.zeros(total_num_emis, dtype=np.float64)
+            M_indices = np.zeros(total_num_emis, dtype=np.int64)
+            M_indptr = np.zeros(total_num_obs+1, dtype=np.int64)
 
         #LSQR system matrix Q and right hand side B
         self.Q = np.zeros((num_emissions, num_emissions), dtype=np.float64)
         self.B = np.zeros((num_emissions), dtype = np.float64)
-        Q_c = np.zeros_like(self.Q)
-        B_c = np.zeros_like(self.B)
-        sum_counter = 0
+        
+        #For faster processing - use blocked matrix computations
+        #Q_c has the shape (rows, cols) which is a subset of M (num_obs, num_emissions)
+        #FIXME: This is just hardcoded at the moment to 2048x1. 
+        #The inversion procedure then re-allocates this matrix to fit with the actual width 
+        #of the rows of M.
+        Q_c = np.zeros((2048, 1), dtype=np.float64)
+        Q_c_min_index = -1
+        Q_c_obs_counter = 0
 
         #Right hand sides
         self.y_0 = np.zeros((total_num_obs), dtype=np.float64)
@@ -323,7 +313,8 @@ class AshInversion():
             current_index = extra_data['current_index']
             nnz_counter = extra_data['nnz_counter']
             Q_c = extra_data['Q_c']
-            B_c = extra_data['B_c']
+            Q_c_min_index = extra_data['Q_c_min_index']
+            Q_c_obs_counter = extra_data['Q_c_obs_counter']
 
         start_assembly = time.time()
         next_save_time = time.time()
@@ -357,41 +348,47 @@ class AshInversion():
                 #Get the indices for the time which corresponds to the a-priori data
                 unit = nc_file['time'].units
                 times = netCDF4.num2date(nc_file['time'][:], units = unit).astype('datetime64[ns]')
-                #time_index = np.flatnonzero(np.isin(self.emission_times, time))
-                time_index = []
+                time_index = [[], []] #Two dimensional array [sim_time_index, emission_time_index]
                 for i, t in enumerate(times):
                     ix = np.flatnonzero(self.emission_times == t)
                     if (len(ix) == 0):
                         self.logger.debug("Time {:s} from {:s} does not match up with a priori emission!".format(str(t), filename))
                     elif (len(ix) == 1):
-                        time_index += [ix]
+                        time_index[0] += [i]
+                        time_index[1] += [ix]
                     else:
                         self.logger.warning("Time {:s} exists multiple times in a priori - using first!".format(str(t)))
-                        time_index = [ix[0]]
+                        time_index[0] += [i]
+                        time_index[1] += [ix[0]]
 
                 if (self.args['verbose'] > 70):
                     self.logger.debug("File times: {:s}, \na priori times: {:s}, \nindices: {:s}".format(str(times), str(self.emission_times), str(time_index)))
                 if (self.args['verbose'] > 90):
                     self.logger.debug("Time indices: {:s}".format(str(time_index)))
 
-                #Get observations that are unmasked
-                obs = nc_file['obs'][:]
-                n_obs = len(obs)
+                if len(time_index[0]) > 0:
+                    #Get observations that are unmasked
+                    obs = nc_file['obs'][:]
+                    n_obs = len(obs)
 
-                obs_flag = nc_file['obs_flag'][:]
+                    obs_flag = nc_file['obs_flag'][:]
 
-                if (use_elevations):
-                    obs_alt = nc_file['obs_alt'][:]*1000 #FIXME: Given in KM
+                    if (use_elevations):
+                        obs_alt = nc_file['obs_alt'][:]*1000 #FIXME: Given in KM
 
-                #Read simulation data from disk
-                sim = nc_file['sim'][:,:,:]
-                timers['end']['dsk'] = time.time()
+                    #Read simulation data from disk
+                    sim = nc_file['sim'][:,:,:]
+                    timers['end']['dsk'] = time.time()
             except Exception as e:
                 self.logger.error("Could not open NetCDF file {:s}".format(filename))
                 raise e
             finally:
                 nc_file.close()
                 nc_file = None
+              
+            if len(time_index[0]) == 0:
+                self.logger.warning("File {:s} does not have any relevant timesteps, skipping.".format(filename))
+                continue
 
             #Check sizes
             assert (n_obs == row.num_observations), "Number of unmasked observations {:d} does not match up with expected {:d}".format(n_obs, row.num_observations)
@@ -412,14 +409,47 @@ class AshInversion():
             if (store_full_matrix):
                 timers['start']['asm3'] = 0
                 timers['end']['asm3'] = 0
+                
+            def assemble(Q_c, Q_min_index, Q_c_obs_counter):
+                """Helper function to avoid code duplication"""
+                
+                #Compute indices of blocked Q_c matrix and the corresponding part of Q
+                #Numpy matrices: (rows, cols)
+                #Q_c has the shape (Q_c_obs_counter, N) which is a subset of M (num_obs, num_emissions)
+                #Q_c will be assembled into Q starting at [Q_c_min_index, Q_c_min_index]
+                #Q has the shape (num_emissions, num_emissions)
+                Q_max_index = min(self.Q.shape[1], Q_min_index + Q_c.shape[1])
+                Q_c_width = Q_max_index - Q_min_index
+                
+                #Pick out part of Q_c that fits with Q (only relevant close to end of assembly, 
+                #when Q_c may be outside of Q
+                R = Q_c[:Q_c_obs_counter,:Q_c_width]
+                
+                #Scale Q matrix
+                R = R*scale_emission
+                
+                #Precompute [M^T sigma_o^-2]
+                #FIXME: The speed of this can be improved.
+                sigma_o_m2 = np.diag(1/(self.sigma_o[obs_counter-Q_c_obs_counter:obs_counter]**2))
+                R_sigma_om2 = np.matmul(R.T, sigma_o_m2)
+                
+                #Precompute Y=[y_0 - M x_a]
+                Y=self.y_0[obs_counter-Q_c_obs_counter:obs_counter] - np.matmul(R, self.x_a[Q_min_index:Q_max_index])
+
+                #Compute [Q = M^T sigma_o^-2 M]
+                self.Q[Q_min_index:Q_max_index, Q_min_index:Q_max_index] += np.matmul(R_sigma_om2, R)
+
+                #Compute [B = M^t sigma_o^-2 (y_0 - M x_a)]
+                self.B[Q_min_index:Q_max_index] += np.matmul(R_sigma_om2, Y)
+                Q_c.fill(0.0)
+                
 
             #  Assemble system matrix
             timers['start']['asm'] = time.time()
-            max_i_width = 0
             for o in range(n_obs):
                 #Set observation and uncertainty of observation
                 self.y_0[obs_counter] = obs[o]*scale_observation
-                current_obs_min_error = obs_min_error if (self.y_0[obs_counter] < obs_zero) else obs_min_error*obs_zero_error_scale
+                current_obs_min_error = obs_min_error if (self.y_0[obs_counter] > obs_zero) else obs_min_error*obs_zero_error_scale
                 current_sigma_o = obs[o]*scale_observation*1.0 #FIXME: constant uncertainty
                 self.sigma_o[obs_counter] = np.sqrt(current_sigma_o**2 + obs_model_error**2 + current_obs_min_error**2)
 
@@ -428,103 +458,80 @@ class AshInversion():
                 if (use_elevations):
                     #Make a duplicate observation at same lat lon, but with zero above the given altitude
                     self.y_0[obs_counter+1] = 0
-                    self.sigma_o[obs_counter+1] = np.sqrt(obs_model_error**2 + (obs_min_error*obs_zero_error_scale)**2)
+                    #FIXME: Use small sigma here => assume height information is reliable
+                    #Should perhaps be updated to be a function from cloud top observatoin?
+                    self.sigma_o[obs_counter+1] = np.sqrt(obs_model_error**2 + obs_min_error**2)
                     altitude_max = min(row.num_altitudes, np.searchsorted(level_altitudes, obs_alt[o]))
                     altitude_ranges = [slice(0, altitude_max), slice(altitude_max, row.num_altitudes)]
 
                 for altitude_range in altitude_ranges:
-                    #Find valid values and indices
-                    #Valid = not masked index && value > 0 && not masked
                     timers['start']['asm0'] += time.time()
-                    vals = sim[o, time_index, altitude_range].ravel(order='C')
-                    indices = self.ordering_index[altitude_range, time_index].transpose().ravel(order='C')
-
-                    assert vals.shape == indices.shape
-
-                    valid_vals = np.flatnonzero(indices >= 0)
-                    valid_vals = valid_vals[vals[valid_vals] > 0.0]
-
-                    vals = vals[valid_vals]*scale_emission
-                    indices = indices[valid_vals]
+                    #Read the indices
+                    indices = self.ordering_index[altitude_range, time_index[1]].transpose().ravel(order='C')
+                    
+                    #Update location of Q_c block
+                    if (Q_c_min_index < 0):
+                        Q_c_min_index = indices.min()
                     timers['end']['asm0'] += time.time()
+                    
+                    #Assemble Q_c into Q and B when needed.
+                    timers['start']['asm1'] += time.time()
+                    if (Q_c_obs_counter >= Q_c.shape[0] or (indices.max() - Q_c_min_index) >= Q_c.shape[1] or (indices.min() - Q_c_min_index) < 0):
+                        self.logger.debug("Assembling. Total obs={:d}, block obs={:d}, min index={:d}, max index={:d}, width={:d}".format(obs_counter, Q_c_obs_counter, indices.min(), indices.max(), indices.max()-Q_c_min_index))
+                        assemble(Q_c, Q_c_min_index, Q_c_obs_counter)
+                        Q_c_min_index = indices.min()
+                        Q_c_obs_counter = 0
+                        
+                        #Check if we have too small / large a matrix, and resize accordingly
+                        row_width = indices.max() - Q_c_min_index
+                        if (row_width >= Q_c.shape[1] or Q_c.shape[1] >= 1.2*row_width):
+                            #Increase to next power of two
+                            #new_size = 1
+                            #while new_size < row_width:
+                            #    new_size = new_size << 1
+                            new_size = int(row_width*1.1) #Increase to 10% more than actual row width
+                            self.logger.info("Row width too large, resizing Q_c from {:d} to {:d} columns".format(Q_c.shape[1], new_size))
+                            Q_c = np.zeros((Q_c.shape[0], new_size))
+                            
+                    timers['end']['asm1'] += time.time()
+                    
+                    timers['start']['asm2'] += time.time()                        
+                    #Read the values and assemble into the Q_c block matrix
+                    vals = sim[o, time_index[0], altitude_range].ravel(order='C')
+                    Q_c[Q_c_obs_counter, indices - Q_c_min_index] = vals
+                    timers['end']['asm2'] += time.time()
 
-                    if (indices.size > 0):
-                        #Compute matrix product Q = M^T sigma_o^-2 M without storing M
-                        #Uses clever (basic) indexing to avoid superfluous copying of data
-                        timers['start']['asm1'] += time.time()
-                        i_min = indices.min()
-                        i_max = indices.max()+1
-                        max_i_width = max(i_max-i_min-1, max_i_width)
-                        v = np.zeros(i_max - i_min)
-                        v[indices-i_min] = vals
-                        V = np.outer(v/(self.sigma_o[obs_counter]**2), v)
-                        timers['end']['asm1'] += time.time()
-                        timers['start']['asm2'] += time.time()
-                        Q_c[i_min:i_max, i_min:i_max] += V
-                        timers['end']['asm2'] += time.time()
-
-                        #Compute matrix product B = M^t sigma_o^-2 (y_0 - M x_a) without storing M
-                        B_c[i_min:i_max] += v*(self.y_0[obs_counter] - np.dot(v, self.x_a[i_min:i_max])) / (self.sigma_o[obs_counter]**2)
-
-                        if (store_full_matrix):
-                            timers['start']['asm3'] += time.time()
-                            nnz_next = nnz_counter+vals.size
-                            M_indices[nnz_counter:nnz_next] = indices
-                            M_data[nnz_counter:nnz_next] = vals
-                            M_indptr[obs_counter+1] = vals.size
-                            nnz_counter = nnz_next
-                            timers['end']['asm3'] += time.time()
+                    #Store the full M matrix (mostly for debugging and sanity checking)
+                    if (store_full_matrix):
+                        timers['start']['asm3'] += time.time()
+                        nnz_next = nnz_counter+vals.size
+                        M_indices[nnz_counter:nnz_next] = indices
+                        M_data[nnz_counter:nnz_next] = vals*scale_emission
+                        M_indptr[obs_counter+1] = vals.size
+                        nnz_counter = nnz_next
+                        timers['end']['asm3'] += time.time()
 
                     obs_counter = obs_counter+1
+                    Q_c_obs_counter = Q_c_obs_counter+1
 
-
-            #Increase accuracy by grouping additions
-            #(ref Kahan summation and rounding)
-            sum_counter += n_obs
+            #Asseble last set of Q_c observations
             last_row = row_index+1 == matched_files_df.shape[0]
-            if ((sum_counter > 1.0e5) or last_row):
-                if  not last_row:
-                    valid_Q = (self.Q != 0.0)
-                    if (np.sum(valid_Q) > 0):
-                        valid_Q = np.logical_and(Q_c != 0.0, valid_Q, np.nan_to_num(Q_c / self.Q) > 1.0e-5)
-                    else:
-                        valid_Q = Q_c > 0.0
-
-                    valid_B = self.B != 0.0
-                    if (np.sum(valid_B) > 0):
-                        valid_B = np.logical_and(B_c != 0.0, valid_B, np.nan_to_num(B_c / self.B) > 1.0e-5)
-                    else:
-                        valid_B = (B_c != 0.0)
-                else:
-                    valid_Q = (Q_c != 0.0)
-                    valid_B = (B_c != 0.0)
-
-                num_valid_Q = np.sum(valid_Q)
-                num_valid_B = np.sum(valid_B)
-
-                self.logger.info("#valid Q={:d}".format(num_valid_Q))
-                self.logger.info("#valid B={:d}".format(num_valid_B))
-
-                if (num_valid_Q > 0):
-                    self.Q[valid_Q] += Q_c[valid_Q]
-                    Q_c[valid_Q] = 0.0
-
-                if (num_valid_B > 0):
-                    self.B[valid_B] += B_c[valid_B]
-                    B_c[valid_B] = 0.0
-
-                sum_counter = 0
+            if (last_row):
+                assemble(Q_c, Q_c_min_index, Q_c_obs_counter)
+                Q_c_min_index = -1
+                Q_c_obs_counter = 0
 
             timers['end']['asm'] = time.time()
             timers['end']['tot'] = time.time()
 
-            #Save progress every 5 minutes (for restarting jobs)
+            #Save progress every 5 minutes (for restarting aborted jobs)
             if ((progress_file is not None) and (time.time() > next_save_time)):
                 self.logger.info("Writing progress file for restarting")
                 current_index = row_index+1
                 extra_data =  {
                     'Q_c': Q_c,
-                    'B_c': B_c,
+                    'Q_c_min_index': Q_c_min_index,
+                    'Q_c_obs_counter': Q_c_obs_counter,
                     'obs_counter': obs_counter,
                     'n_removed': n_removed,
                     'current_index': current_index,
@@ -544,10 +551,9 @@ class AshInversion():
             logstr += ["{:.1f} %".format(100*obs_counter/total_num_obs)]
             logstr += ["#obs={:d}".format(n_obs)]
             logstr += ["#obs/s={:.1f}".format(n_obs/(timers['end']['tot'] - timers['start']['tot']))]
-            logstr += ["mem={:.1f} GB".format(self.get_memory_usage_gb())]
+            logstr += ["mem={:.1f} GB".format(self.get_memory_usage_gb())]
             for key in timers['start'].keys():
                 logstr += ["{:s}={:.1f} s".format(key, timers['end'][key] - timers['start'][key])]
-            logstr += ["width={:d}".format(max_i_width)]
             self.logger.info(", ".join(logstr))
 
 
@@ -608,7 +614,7 @@ class AshInversion():
 
         np.savez(outname, **data)
         toc = time.time()
-        self.logger.info("Wrote to disk in {:.0f} s".format(toc-tic))
+        self.logger.info("Wrote to disk in {:.0f} s".format(toc-tic))
 
 
 
@@ -868,7 +874,7 @@ if __name__ == '__main__':
     import sys
     parser = configargparse.ArgParser(description='Run iterative inversion algorithm.')
     parser.add("-c", "--config", is_config_file=True, help="config file which specifies options (commandline overrides)")
-    parser.add("-v", "--verbose", help="increase output verbosity", action="store_true")
+    parser.add("-v", "--verbose", help="Set output verbosity [0-100]", type=float, default=0)
 
     #Input arguments
     input_args = parser.add_argument_group('Input arguments')
@@ -919,15 +925,16 @@ if __name__ == '__main__':
         print("{:s} = {:s}".format(var, str(val)))
     print("=======================================")
 
-    with open(args.config) as cfg_file:
-        cfg = cfg_file.read()
-
     run_meta = {
         'arguments': json.dumps(vars(args)),
         'run_date': datetime.datetime.utcnow().isoformat(timespec='seconds'),
-        'run_dir': os.getcwd(),
-        'config': json.dumps(cfg)
+        'run_dir': os.getcwd()
     }
+
+    if args.config is not None:
+        with open(args.config) as cfg_file:
+            cfg = cfg_file.read()
+        run_meta['config'] = json.dumps(cfg)
 
 
     if (args.verbose):
