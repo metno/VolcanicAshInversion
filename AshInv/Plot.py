@@ -191,7 +191,7 @@ def npTimeToStr(np_time, fmt="%Y-%m-%d %H:%M"):
 def plotEmissions(json_data,
                 dataset,
                 colormap='default',
-                unit='tg',
+                unit='Tg',
                 axis_date_format="%d %b\n%H:%M",
                 y_max=None,
                 usetex=True,
@@ -224,10 +224,23 @@ def plotEmissions(json_data,
     }
     plotargs.update(**kwargs)
 
-    plt.imshow(dataset, **plotargs)
-    cbar = plt.colorbar(orientation='horizontal', pad=0.15, label=unit)
-    plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
-    plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
+    if len(y_labels) > 1 :
+        plt.imshow(dataset, **plotargs)
+        cbar = plt.colorbar(orientation='horizontal', pad=0.15, label=unit)
+        plt.xticks(ticks=x_ticks, labels=x_labels, rotation=0, horizontalalignment='center', usetex=usetex)
+        plt.yticks(ticks=y_ticks, labels=y_labels, usetex=usetex)
+    else:
+        # no height
+        x_vals = [npTimeToDatetime(t) for t in json_data['emission_times']]
+        sum = dataset.sum()
+        sum_unit = unit
+        # hardcoded units
+        if unit == 'g/s':
+            sum *= 3600 / (1000)
+            sum_unit = "kg"            
+        plt.plot(x_vals, dataset[0], label=f'Sum: {sum:.0f} {unit}')
+        plt.xticks(rotation=40)
+        plt.legend()
 
     if (plotsum):
         plt.sca(plt.gca().twinx())
@@ -239,7 +252,7 @@ def plotEmissions(json_data,
         
 
 def plotAshInv(json_data,
-                unit="tg",
+                unit="Tg",
                 colormap='default',
                 usetex=True,
                 plotsum=True,
@@ -271,7 +284,7 @@ def plotAshInv(json_data,
         axs = [axs]
     
     unit_scale = 0.0
-    if (unit == 'tg'):
+    if (unit == 'Tg'):
         unit_scale = 1.0
     elif (unit == 'kg/(m*s)'):
         # The setup is to emit 1 tg over three hours for each level
@@ -281,6 +294,8 @@ def plotAshInv(json_data,
         duration = duration[0]
 
         unit_scale = 1.0/(json_data['level_heights'][:,None]*duration)*1.0e9
+    elif (unit == 'g/s'): # etex
+        unit_scale = 1.0
     else:
         raise "Unknown unit {:s}".format(unit)
         
@@ -333,7 +348,7 @@ def plotAshInv(json_data,
         #norm = MidpointLogNorm(lin_thres=0.01, lin_scale=1.0, vmin=-1.0, vmax=10, base=10)
         diff = (json_data['a_posteriori']-json_data['a_priori']) / json_data['a_priori']
         plotEmissions(json_data, diff, 
-            unit='tg', 
+            unit='Tg', 
             colormap='bwr', 
             axis_date_format=axis_date_format, 
             y_max=y_max,
@@ -465,7 +480,7 @@ if __name__ == "__main__":
     parser = configargparse.ArgParser(description='Plot from ash inversion.')
     parser.add("-j", "--json", type=str, help="JSON-file to plot", required=True)
     parser.add("-o", "--output", type=str, help="Output file")
-    parser.add("--unit", type=str, help="Unit to use for plots ( {tg|kg/(m*s)}")
+    parser.add("--unit", type=str, help="Unit to use for plots ( {Tg|kg/(m*s)}")
     parser.add("--colormap", type=str, help="Colormap to use")
     parser.add("--usetex", type=str2bool, help="Use latex", nargs='?', const=True, default=True)
     parser.add("--plotsum", type=str2bool, help="Plot sum of emitted ash")

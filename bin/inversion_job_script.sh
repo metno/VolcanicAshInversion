@@ -50,6 +50,7 @@ RUN_INVERSION=${RUN_INVERSION:-0}
 RUN_PLOTS=${RUN_PLOTS:-0}
 RUN_A_POSTERIORI_CSV=${RUN_A_POSTERIORI_CSV:-0}
 SOLVER=${SOLVER:-"direct"}
+UNITS=${UNITS:-"Tg"}
 RUN_DATE=${RUN_DATE:-$(date +"%Y%m%dT%H%MZ")}
 RESULTS_DIR=${RESULTS_DIR:-"$RUN_DIR/results/${TAG}_${RUN_DATE}"}
 SYSTEM_MATRIX_FILE=${SYSTEM_MATRIX_FILE:-"$RUN_DIR/inversion_system_matrix.npz"}
@@ -259,7 +260,8 @@ if [ $RUN_PLOTS == 1 ]; then
                         --colormap birthe \
                         --usetex=False \
                         --json $RESULT_JSON \
-                        --output $RESULT_PNG
+                        --output $RESULT_PNG \
+                        --unit $UNITS
     done
 fi
 
