@@ -3,3 +3,4 @@ output
 miniconda3
 from_nebula
 input_data/**/*.nc
+**/__pycache__/**
