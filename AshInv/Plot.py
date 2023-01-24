@@ -240,6 +240,9 @@ def plotEmissions(json_data,
             sum_unit = "kg"
         elif unit == 'PBq/h':
             sum_unit = 'PBq'
+        elif unit == 'Bq/h':
+            sum_unit = 'PBq'
+            sum *= 1.e-15
         elif unit == 'Bq/s': # ruthenium
             sum_unit = 'TBq'
             sum *= 3600 * 1.e-12
@@ -304,7 +307,9 @@ def plotAshInv(json_data,
         unit_scale = 1.0
     elif unit == 'PBq/h': # loviisa
         unit_scale = 1.0
-    elif unit == 'Bq/s': # loviisa
+    elif unit == 'Bq/h': # loviisa2
+        unit_scale = 1.0
+    elif unit == 'Bq/s': # ruth
         unit_scale = 1.0
     else:
         raise "Unknown unit {:s}".format(unit)

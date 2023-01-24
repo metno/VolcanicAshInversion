@@ -489,7 +489,7 @@ class AshInversion():
                             #new_size = 1
                             #while new_size < row_width:
                             #    new_size = new_size << 1
-                            new_size = int(row_width*1.1) #Increase to 10% more than actual row width
+                            new_size = max(row_width+1, int(row_width*1.1)) #Increase to 10% more than actual row width
                             self.logger.info("Row width too large, resizing Q_c from {:d} to {:d} columns".format(Q_c.shape[1], new_size))
                             Q_c = np.zeros((Q_c.shape[0], new_size))
                             
