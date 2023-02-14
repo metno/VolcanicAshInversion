@@ -36,7 +36,9 @@ if [[ -z "$INVERSION_ENVIRONMENT_SETUP" ]]; then
     exit -1
 fi
 
-
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+# need to run from script-dir to allow for git
+cd $SCRIPT_DIR
 
 
 
@@ -48,6 +50,7 @@ RUN_INVERSION=${RUN_INVERSION:-0}
 RUN_PLOTS=${RUN_PLOTS:-0}
 RUN_A_POSTERIORI_CSV=${RUN_A_POSTERIORI_CSV:-0}
 SOLVER=${SOLVER:-"direct"}
+UNITS=${UNITS:-"Tg"}
 RUN_DATE=${RUN_DATE:-$(date +"%Y%m%dT%H%MZ")}
 RESULTS_DIR=${RESULTS_DIR:-"$RUN_DIR/results/${TAG}_${RUN_DATE}"}
 SYSTEM_MATRIX_FILE=${SYSTEM_MATRIX_FILE:-"$RUN_DIR/inversion_system_matrix.npz"}
@@ -168,6 +171,7 @@ if [ $RUN_SETUP == 1 ]; then
 
     #Print git version info for reproducibility
     inv_exec echo "INFO: Running git to store source code version and local changes"
+    inv_exec echo $(pwd)
     inv_exec git log -n1
     inv_exec git status --porcelain
     inv_exec echo "INFO: Storing uncommited git changes in patch file '$RESULTS_DIR/uncommitted_changes.patch'"
@@ -256,7 +260,8 @@ if [ $RUN_PLOTS == 1 ]; then
                         --colormap birthe \
                         --usetex=False \
                         --json $RESULT_JSON \
-                        --output $RESULT_PNG
+                        --output $RESULT_PNG \
+                        --unit $UNITS
     done
 fi
 

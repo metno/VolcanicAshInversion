@@ -137,7 +137,7 @@ class AshInversion():
         Read the a priori emission estimates from file
         and make the a priori vectors
 
-        param: a_priori_file - CSV-file with dates and filenames for satellite observations
+        param: a_priori_file - JSON-file with dates and filenames for a_priori
 
         scale_a_priori - Scale a_priori to same unit as emission/observation (typically kg => kg is 1)
         min_emission_uncertainty_scale - Set minimum uncertainty to average multiplied by scale
@@ -371,7 +371,7 @@ class AshInversion():
                     obs = nc_file['obs'][:]
                     n_obs = len(obs)
 
-                    obs_flag = nc_file['obs_flag'][:]
+                    # obs_flag = nc_file['obs_flag'][:]
 
                     if (use_elevations):
                         obs_alt = nc_file['obs_alt'][:]*1000 #FIXME: Given in KM
@@ -489,7 +489,7 @@ class AshInversion():
                             #new_size = 1
                             #while new_size < row_width:
                             #    new_size = new_size << 1
-                            new_size = int(row_width*1.1) #Increase to 10% more than actual row width
+                            new_size = max(row_width+1, int(row_width*1.1)) #Increase to 10% more than actual row width
                             self.logger.info("Row width too large, resizing Q_c from {:d} to {:d} columns".format(Q_c.shape[1], new_size))
                             Q_c = np.zeros((Q_c.shape[0], new_size))
                             
